@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tribal Knowledge MCP Server — Architecture Report</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #ffa657;
+    --accent5: #f85149;
+    --accent6: #39d353;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  /* HEADER */
+  .page-header {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 60%, #1a1f2e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 52px 48px 44px;
+    position: relative;
+    overflow: hidden;
+  }
+  .page-header::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(88,166,255,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .eyebrow {
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 14px;
+  }
+  .page-header h1 {
+    font-size: 38px; font-weight: 700;
+    color: var(--text); margin-bottom: 12px;
+    letter-spacing: -0.6px; line-height: 1.2;
+  }
+  .page-header .subtitle {
+    color: var(--text-muted); font-size: 16px;
+    max-width: 700px; line-height: 1.6;
+  }
+  .meta { margin-top: 28px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 5px 14px;
+    font-size: 12px; font-weight: 500; color: var(--text-muted);
+  }
+  .badge.highlight { border-color: rgba(88,166,255,0.3); color: var(--accent); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .dot-green { background: var(--accent2); }
+  .dot-blue { background: var(--accent); }
+  .dot-purple { background: var(--accent3); }
+  .dot-orange { background: var(--accent4); }
+
+  /* LAYOUT */
+  .container { max-width: 1140px; margin: 0 auto; padding: 48px 48px; }
+  .section { margin-bottom: 60px; }
+  .section-label {
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+  h2 { font-size: 23px; font-weight: 600; margin-bottom: 10px; color: var(--text); }
+  .lead { color: var(--text-muted); max-width: 760px; margin-bottom: 24px; font-size: 14px; }
+
+  /* CARDS */
+  .card-grid { display: grid; gap: 12px; }
+  .card-grid-2 { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+  .card-grid-3 { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 22px;
+    transition: border-color 0.15s;
+  }
+  .card:hover { border-color: #484f58; }
+  .card-icon { font-size: 22px; margin-bottom: 10px; display: block; }
+  .card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: var(--text-muted); margin: 0; }
+
+  /* ARCHITECTURE DIAGRAM WRAPPER */
+  .arch-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 36px;
+    overflow-x: auto;
+  }
+
+  /* PIPELINE FLOW */
+  .pipeline {
+    display: flex; align-items: center; gap: 0;
+    overflow-x: auto; padding-bottom: 4px;
+  }
+  .pipe-step {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px; min-width: 110px;
+    text-align: center; flex-shrink: 0;
+  }
+  .pipe-step .ps-icon { font-size: 18px; margin-bottom: 4px; }
+  .pipe-step .ps-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .pipe-step .ps-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .pipe-arrow {
+    color: var(--text-muted); font-size: 18px;
+    padding: 0 4px; flex-shrink: 0;
+  }
+  .pipe-step.highlight-step { border-color: rgba(88,166,255,0.4); }
+  .pipe-step.llm-step { border-color: rgba(210,168,255,0.4); }
+
+  /* TABLES */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th {
+    text-align: left; padding: 10px 16px;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-muted); background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .data-table th:first-child { border-radius: 8px 0 0 0; }
+  .data-table th:last-child { border-radius: 0 8px 0 0; }
+  .data-table td {
+    padding: 11px 16px; font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top; color: var(--text-muted);
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .data-table .strong { font-weight: 600; color: var(--text); }
+  .tag {
+    display: inline-block; border-radius: 4px;
+    padding: 2px 8px; font-size: 11px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .tag-tool { background: #1a2d1a; color: var(--accent2); }
+  .tag-resource { background: #1f1a2d; color: var(--accent3); }
+  .tag-prompt { background: #2d1f1a; color: var(--accent4); }
+  .tag-go { background: #1a2535; color: #79c0ff; }
+  .tag-react { background: #1a2535; color: #58a6ff; }
+  .tag-llm { background: #2a1f2d; color: var(--accent3); }
+
+  /* SCHEMA */
+  .schema-block {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+  }
+  .schema-header {
+    background: var(--surface2); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; font-size: 13px; font-weight: 600;
+    color: var(--accent3); font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .field-row {
+    display: grid; grid-template-columns: 180px 130px 1fr; gap: 12px;
+    padding: 8px 20px; border-bottom: 1px solid var(--border);
+    font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .field-row:last-child { border-bottom: none; }
+  .fn { color: var(--text); }
+  .ft { color: var(--accent4); }
+  .fd { color: var(--text-muted); font-size: 12px; font-family: -apple-system, sans-serif; }
+
+  /* STACK GRID */
+  .stack-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+  .stack-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  .stack-layer { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+  .stack-name { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .stack-note { font-size: 12px; color: var(--text-muted); }
+
+  /* FLOW BLOCKS */
+  .flow-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .flow-block {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 24px;
+  }
+  .flow-title {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .flow-steps { display: flex; flex-direction: column; gap: 8px; }
+  .flow-step { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--text-muted); }
+  .snum {
+    min-width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: var(--accent);
+    margin-top: 2px; flex-shrink: 0;
+  }
+
+  /* UI VIEWS TABLE */
+  .ui-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .ui-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  .ui-page { font-size: 13px; font-weight: 600; color: var(--accent); margin-bottom: 6px; }
+  .ui-desc { font-size: 13px; color: var(--text-muted); }
+
+  /* PHASES */
+  .phase-list { display: flex; flex-direction: column; gap: 3px; }
+  .phase-row { display: grid; grid-template-columns: 120px 1fr; }
+  .phase-num {
+    padding: 16px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); background: var(--surface);
+    border: 1px solid var(--border); border-right: none;
+    border-radius: 8px 0 0 8px;
+    display: flex; align-items: flex-start;
+  }
+  .phase-body {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 0 8px 8px 0; padding: 14px 20px;
+  }
+  .phase-name { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 10px;
+    font-size: 12px; color: var(--text-muted);
+  }
+
+  /* SCOPE OUT */
+  .scope-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .scope-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid rgba(248,81,73,0.4);
+    border-radius: 6px; padding: 14px 16px;
+  }
+  .scope-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .scope-card p { font-size: 12px; color: var(--text-muted); }
+
+  code {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px; color: var(--accent3);
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 48px; color: var(--text-muted);
+    font-size: 12px; display: flex;
+    justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div class="eyebrow">Architecture &amp; Planning Report · v2</div>
+  <h1>Tribal Knowledge MCP Server</h1>
+  <p class="subtitle">A self-improving knowledge engine — built as a single Go binary — that captures team knowledge, analyzes and reorganizes it continuously, generates evolving specialized AI agents, and exposes everything through an embedded web UI and MCP protocol.</p>
+  <div class="meta">
+    <div class="badge highlight"><span class="dot dot-blue"></span> Go Binary · Single Deploy</div>
+    <div class="badge"><span class="dot dot-purple"></span> MCP Protocol</div>
+    <div class="badge"><span class="dot dot-green"></span> Agent Generation</div>
+    <div class="badge"><span class="dot dot-orange"></span> React UI · Embedded</div>
+    <div class="badge">June 2026</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- THE BIG IDEA -->
+  <div class="section">
+    <div class="section-label">The Big Idea</div>
+    <h2>A Self-Improving Team Intelligence Engine</h2>
+    <p class="lead">Most knowledge systems are passive — you put things in, you get things out. This system is active: it continuously analyzes what the team stores, reorganizes it into structured clusters, and synthesizes specialized AI agents that get better as more knowledge accumulates. The more the team contributes, the smarter every member's AI becomes.</p>
+    <div class="card-grid card-grid-3">
+      <div class="card">
+        <span class="card-icon">📥</span>
+        <h3>Capture</h3>
+        <p>Team members store prompt patterns, workflows, domain facts, and anti-patterns via MCP tools.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">🧠</span>
+        <h3>Analyze</h3>
+        <p>Background pipeline clusters, deduplicates, scores, and summarizes knowledge using embeddings + LLM.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">🤖</span>
+        <h3>Generate Agents</h3>
+        <p>LLM synthesizes specialized agent system prompts from each knowledge cluster. Agents evolve with every pipeline run.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">📈</span>
+        <h3>Evolve</h3>
+        <p>Agents are versioned. Each new knowledge contribution can trigger a new, improved agent version with a changelog.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">🌐</span>
+        <h3>Browse &amp; Download</h3>
+        <p>Embedded web UI provides full visibility into stored knowledge, clusters, datasets, and agents. Download any agent in any format.</p>
+      </div>
+      <div class="card">
+        <span class="card-icon">🔌</span>
+        <h3>MCP Protocol</h3>
+        <p>Everything accessible to LLM clients via MCP tools, resources, and prompt templates. No SDK required.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SYSTEM ARCHITECTURE -->
+  <div class="section">
+    <div class="section-label">Architecture</div>
+    <h2>System Overview — Single Go Binary</h2>
+    <p class="lead">Everything ships in one binary. No separate service deployments. The Go binary runs the MCP server, the web UI server, the analysis pipeline, and the agent generation engine — all within the same process.</p>
+    <div class="arch-wrap">
+      <svg width="1000" height="580" viewBox="0 0 1000 580" fill="none" xmlns="http://www.w3.org/2000/svg">
+
+        <!-- MCP Clients -->
+        <rect x="20" y="16" width="440" height="56" rx="8" fill="#21262d" stroke="#30363d"/>
+        <text x="240" y="36" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" letter-spacing="0.12em" font-family="system-ui">MCP CLIENTS</text>
+        <rect x="40" y="42" width="100" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="90" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Claude Desktop</text>
+        <rect x="155" y="42" width="80" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="195" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Cursor / Zed</text>
+        <rect x="250" y="42" width="100" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="300" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Custom Apps</text>
+
+        <!-- Web Browsers -->
+        <rect x="540" y="16" width="440" height="56" rx="8" fill="#21262d" stroke="#30363d"/>
+        <text x="760" y="36" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" letter-spacing="0.12em" font-family="system-ui">WEB BROWSERS</text>
+        <rect x="570" y="42" width="120" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="630" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Team Members</text>
+        <rect x="710" y="42" width="100" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="760" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Curators</text>
+        <rect x="830" y="42" width="90" height="20" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="875" y="56" text-anchor="middle" fill="#e6edf3" font-size="11" font-family="system-ui">Admins</text>
+
+        <!-- Arrows down -->
+        <line x1="240" y1="72" x2="240" y2="100" stroke="#484f58" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="170" y="91" fill="#8b949e" font-size="9" font-family="monospace">MCP stdio / HTTP-SSE</text>
+        <line x1="760" y1="72" x2="760" y2="100" stroke="#484f58" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="690" y="91" fill="#8b949e" font-size="9" font-family="monospace">HTTP / React SPA</text>
+
+        <!-- GO BINARY outer box -->
+        <rect x="20" y="100" width="960" height="400" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <text x="500" y="120" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" letter-spacing="0.12em" font-family="system-ui">GO BINARY (SINGLE DEPLOYABLE ARTIFACT)</text>
+
+        <!-- MCP Server box -->
+        <rect x="40" y="130" width="420" height="68" rx="8" fill="#21262d" stroke="#58a6ff" stroke-opacity="0.5"/>
+        <text x="250" y="150" text-anchor="middle" fill="#58a6ff" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">MCP SERVER</text>
+        <rect x="60" y="156" width="90" height="18" rx="4" fill="#1f2d3d" stroke="#30363d"/>
+        <text x="105" y="168" text-anchor="middle" fill="#58a6ff" font-size="10" font-family="system-ui">Tools (12)</text>
+        <rect x="165" y="156" width="100" height="18" rx="4" fill="#1f1a2d" stroke="#30363d"/>
+        <text x="215" y="168" text-anchor="middle" fill="#d2a8ff" font-size="10" font-family="system-ui">Resources (6)</text>
+        <rect x="280" y="156" width="110" height="18" rx="4" fill="#2d1f1a" stroke="#30363d"/>
+        <text x="335" y="168" text-anchor="middle" fill="#ffa657" font-size="10" font-family="system-ui">Prompts (2)</text>
+
+        <!-- Web UI Server box -->
+        <rect x="540" y="130" width="420" height="68" rx="8" fill="#21262d" stroke="#3fb950" stroke-opacity="0.5"/>
+        <text x="750" y="150" text-anchor="middle" fill="#3fb950" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">WEB UI SERVER + REST API</text>
+        <rect x="560" y="156" width="130" height="18" rx="4" fill="#1a2d1a" stroke="#30363d"/>
+        <text x="625" y="168" text-anchor="middle" fill="#3fb950" font-size="10" font-family="system-ui">React SPA (go:embed)</text>
+        <rect x="705" y="156" width="100" height="18" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="755" y="168" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">REST API</text>
+        <rect x="820" y="156" width="110" height="18" rx="4" fill="#161b22" stroke="#30363d"/>
+        <text x="875" y="168" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Downloads</text>
+
+        <!-- Arrows to Knowledge API -->
+        <line x1="250" y1="198" x2="250" y2="228" stroke="#484f58" stroke-width="1.5"/>
+        <line x1="750" y1="198" x2="750" y2="228" stroke="#484f58" stroke-width="1.5"/>
+        <line x1="250" y1="228" x2="500" y2="228" stroke="#484f58" stroke-width="1"/>
+        <line x1="500" y1="228" x2="750" y2="228" stroke="#484f58" stroke-width="1"/>
+        <line x1="500" y1="228" x2="500" y2="236" stroke="#484f58" stroke-width="1.5"/>
+
+        <!-- Knowledge API Layer -->
+        <rect x="40" y="236" width="920" height="52" rx="8" fill="#21262d" stroke="#30363d"/>
+        <text x="500" y="258" text-anchor="middle" fill="#8b949e" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">KNOWLEDGE API LAYER</text>
+        <rect x="70" y="264" width="80" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="110" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">CRUD</text>
+        <rect x="168" y="264" width="90" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="213" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">Search/Rank</text>
+        <rect x="276" y="264" width="100" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="326" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">Enhancement</text>
+        <rect x="394" y="264" width="80" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="434" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">Ratings</text>
+        <rect x="492" y="264" width="80" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="532" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">Analytics</text>
+        <rect x="590" y="264" width="80" height="16" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="630" y="275" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="system-ui">Export</text>
+
+        <!-- Arrow down -->
+        <line x1="500" y1="288" x2="500" y2="312" stroke="#484f58" stroke-width="1.5"/>
+
+        <!-- Analysis Pipeline -->
+        <rect x="40" y="312" width="430" height="64" rx="8" fill="#21262d" stroke="#d2a8ff" stroke-opacity="0.5"/>
+        <text x="255" y="332" text-anchor="middle" fill="#d2a8ff" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">KNOWLEDGE ANALYSIS PIPELINE</text>
+        <text x="255" y="346" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Cluster · Deduplicate · Score · Summarize · Tag</text>
+        <text x="255" y="362" text-anchor="middle" fill="#8b949e" font-size="9" font-family="system-ui">(background goroutines + LLM calls)</text>
+
+        <!-- Agent Generation Engine -->
+        <rect x="530" y="312" width="430" height="64" rx="8" fill="#21262d" stroke="#ffa657" stroke-opacity="0.5"/>
+        <text x="745" y="332" text-anchor="middle" fill="#ffa657" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">AGENT GENERATION ENGINE</text>
+        <text x="745" y="346" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Generate · Version · Specialize · Changelog</text>
+        <text x="745" y="362" text-anchor="middle" fill="#8b949e" font-size="9" font-family="system-ui">(one agent per cluster, LLM synthesis)</text>
+
+        <!-- Arrow from pipeline to agent gen -->
+        <line x1="470" y1="344" x2="530" y2="344" stroke="#484f58" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <polygon points="526,340 534,344 526,348" fill="#484f58"/>
+
+        <!-- Arrows down to storage -->
+        <line x1="255" y1="376" x2="255" y2="400" stroke="#484f58" stroke-width="1.5"/>
+        <line x1="745" y1="376" x2="745" y2="400" stroke="#484f58" stroke-width="1.5"/>
+        <line x1="255" y1="400" x2="500" y2="400" stroke="#484f58" stroke-width="1"/>
+        <line x1="500" y1="400" x2="745" y2="400" stroke="#484f58" stroke-width="1"/>
+        <line x1="500" y1="400" x2="500" y2="408" stroke="#484f58" stroke-width="1.5"/>
+
+        <!-- Storage Layer -->
+        <rect x="40" y="408" width="920" height="72" rx="8" fill="#21262d" stroke="#3fb950" stroke-opacity="0.35"/>
+        <text x="500" y="428" text-anchor="middle" fill="#3fb950" font-size="9" font-weight="600" letter-spacing="0.1em" font-family="system-ui">STORAGE LAYER</text>
+        <rect x="80" y="436" width="140" height="18" rx="3" fill="#1a2d1a" stroke="#30363d"/>
+        <text x="150" y="448" text-anchor="middle" fill="#3fb950" font-size="10" font-family="system-ui">SQLite + sqlite-vec</text>
+        <rect x="238" y="436" width="120" height="18" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="298" y="448" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Entries + Embeds</text>
+        <rect x="376" y="436" width="110" height="18" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="431" y="448" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Clusters + Datasets</text>
+        <rect x="504" y="436" width="120" height="18" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="564" y="448" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Agent Versions</text>
+        <rect x="642" y="436" width="110" height="18" rx="3" fill="#161b22" stroke="#30363d"/>
+        <text x="697" y="448" text-anchor="middle" fill="#8b949e" font-size="10" font-family="system-ui">Ratings + Users</text>
+        <text x="500" y="472" text-anchor="middle" fill="#484f58" font-size="9" font-family="system-ui">→ PostgreSQL + pgvector in v2</text>
+
+      </svg>
+    </div>
+  </div>
+
+  <!-- KNOWLEDGE ANALYSIS PIPELINE -->
+  <div class="section">
+    <div class="section-label">Analysis Pipeline</div>
+    <h2>Continuous Knowledge Processing</h2>
+    <p class="lead">Runs as background goroutines triggered by new entry count thresholds or a time interval. Each stage feeds the next. The result is a versioned, processed dataset — and a trigger for agent generation.</p>
+    <div class="pipeline">
+      <div class="pipe-step highlight-step">
+        <div class="ps-icon">🔢</div>
+        <div class="ps-name">Embed</div>
+        <div class="ps-desc">Un-embedded entries</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step highlight-step">
+        <div class="ps-icon">🗂️</div>
+        <div class="ps-name">Cluster</div>
+        <div class="ps-desc">Cosine similarity groups</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step llm-step">
+        <div class="ps-icon">♻️</div>
+        <div class="ps-name">Deduplicate</div>
+        <div class="ps-desc">LLM merge near-dupes</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step highlight-step">
+        <div class="ps-icon">⭐</div>
+        <div class="ps-name">Score</div>
+        <div class="ps-desc">Rating × usage × coherence</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step llm-step">
+        <div class="ps-icon">📝</div>
+        <div class="ps-name">Summarize</div>
+        <div class="ps-desc">LLM cluster summary</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step llm-step">
+        <div class="ps-icon">🏷️</div>
+        <div class="ps-name">Auto-tag</div>
+        <div class="ps-desc">LLM domain assignment</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step highlight-step">
+        <div class="ps-icon">🔍</div>
+        <div class="ps-name">Gap Detect</div>
+        <div class="ps-desc">Thin coverage domains</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step" style="border-color:rgba(255,166,87,0.4)">
+        <div class="ps-icon">🤖</div>
+        <div class="ps-name">Generate</div>
+        <div class="ps-desc">Trigger agent gen</div>
+      </div>
+    </div>
+    <p style="font-size:12px; color:var(--text-muted); margin-top:10px;">Purple border = LLM call. Blue border = pure compute. Each run produces a versioned snapshot stored in the dataset history.</p>
+  </div>
+
+  <!-- AGENT GENERATION -->
+  <div class="section">
+    <div class="section-label">Agent Generation</div>
+    <h2>Specialized Agents from Knowledge Clusters</h2>
+    <p class="lead">After each pipeline run, the engine generates or updates one agent per knowledge cluster. Agents are versioned, carry changelogs, and can be downloaded in multiple formats. As the team contributes more, agents become more specialized and accurate.</p>
+    <div class="flow-grid">
+      <div class="flow-block">
+        <div class="flow-title">🤖 Agent Generation Flow</div>
+        <div class="flow-steps">
+          <div class="flow-step"><span class="snum">1</span>Analysis pipeline completes; clusters ready</div>
+          <div class="flow-step"><span class="snum">2</span>For each cluster with ≥ threshold entries: load summary, top-rated entries, anti-patterns</div>
+          <div class="flow-step"><span class="snum">3</span>LLM call: synthesize specialized system prompt</div>
+          <div class="flow-step"><span class="snum">4</span>Diff against previous agent version</div>
+          <div class="flow-step"><span class="snum">5</span>Record changelog: what improved, what was added</div>
+          <div class="flow-step"><span class="snum">6</span>Persist new agent version (draft or published)</div>
+          <div class="flow-step"><span class="snum">7</span>Available via MCP and web UI for download</div>
+        </div>
+      </div>
+      <div class="flow-block">
+        <div class="flow-title">📦 Agent Export Formats</div>
+        <div class="flow-steps">
+          <div class="flow-step"><span class="snum">1</span><strong style="color:var(--accent)">Claude Subagent .md</strong> — YAML frontmatter + system prompt; drop into <code>.claude/agents/</code></div>
+          <div class="flow-step"><span class="snum">2</span><strong style="color:var(--accent)">System Prompt .txt</strong> — Plain text; works with any LLM (GPT, Gemini, etc.)</div>
+          <div class="flow-step"><span class="snum">3</span><strong style="color:var(--accent)">JSON</strong> — Full structured config: instructions, knowledge refs, anti-patterns, version history</div>
+          <div class="flow-step"><span class="snum">4</span><strong style="color:var(--accent)">Bulk ZIP</strong> — All agents in chosen format</div>
+        </div>
+      </div>
+      <div class="flow-block">
+        <div class="flow-title">📊 Agent Properties</div>
+        <div class="flow-steps">
+          <div class="flow-step"><span class="snum">·</span>Versioned — v1, v2, v3… with full history preserved</div>
+          <div class="flow-step"><span class="snum">·</span>Changelog — diff summary between versions</div>
+          <div class="flow-step"><span class="snum">·</span>Draft / Published states — curators approve before serving via MCP</div>
+          <div class="flow-step"><span class="snum">·</span>Source knowledge refs — which entries informed this agent</div>
+          <div class="flow-step"><span class="snum">·</span>Cross-domain agents — for clusters spanning multiple domains</div>
+          <div class="flow-step"><span class="snum">·</span>Served directly via MCP resource <code>agents://domain/{name}</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP API SURFACE -->
+  <div class="section">
+    <div class="section-label">MCP API Surface</div>
+    <h2>Tools, Resources &amp; Prompts</h2>
+    <table class="data-table">
+      <thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td class="strong">knowledge_store</td><td><span class="tag tag-tool">tool</span></td><td>Save a knowledge entry (prompt, pattern, workflow, domain_fact, anti_pattern)</td></tr>
+        <tr><td class="strong">knowledge_search</td><td><span class="tag tag-tool">tool</span></td><td>Semantic + keyword hybrid search with filters (type, domain, cluster, rating threshold)</td></tr>
+        <tr><td class="strong">knowledge_get</td><td><span class="tag tag-tool">tool</span></td><td>Retrieve entry by ID; increments usage count</td></tr>
+        <tr><td class="strong">knowledge_list</td><td><span class="tag tag-tool">tool</span></td><td>Browse with filters: type, domain, cluster, author, tags, min-rating, sort</td></tr>
+        <tr><td class="strong">knowledge_rate</td><td><span class="tag tag-tool">tool</span></td><td>Rate an entry 1–5 with optional feedback text</td></tr>
+        <tr><td class="strong">knowledge_delete</td><td><span class="tag tag-tool">tool</span></td><td>Remove entry (author or admin only)</td></tr>
+        <tr><td class="strong">prompt_enhance</td><td><span class="tag tag-tool">tool</span></td><td>Improve a draft prompt using retrieved team knowledge + domain agent context</td></tr>
+        <tr><td class="strong">prompt_suggest</td><td><span class="tag tag-tool">tool</span></td><td>Get prompt suggestions for a described task based on similar stored entries</td></tr>
+        <tr><td class="strong">agent_get</td><td><span class="tag tag-tool">tool</span></td><td>Retrieve a generated agent by ID or domain name</td></tr>
+        <tr><td class="strong">agent_list</td><td><span class="tag tag-tool">tool</span></td><td>List all generated agents with version history and status</td></tr>
+        <tr><td class="strong">cluster_list</td><td><span class="tag tag-tool">tool</span></td><td>List current knowledge clusters with entry counts and summaries</td></tr>
+        <tr><td class="strong">analysis_status</td><td><span class="tag tag-tool">tool</span></td><td>Get pipeline run history, current status, and next scheduled run</td></tr>
+        <tr><td class="strong">knowledge://team/top</td><td><span class="tag tag-resource">resource</span></td><td>Top-rated entries across the team</td></tr>
+        <tr><td class="strong">knowledge://team/recent</td><td><span class="tag tag-resource">resource</span></td><td>Most recently added entries</td></tr>
+        <tr><td class="strong">knowledge://domain/{name}</td><td><span class="tag tag-resource">resource</span></td><td>All entries tagged to a domain</td></tr>
+        <tr><td class="strong">knowledge://cluster/{id}</td><td><span class="tag tag-resource">resource</span></td><td>All entries belonging to a knowledge cluster</td></tr>
+        <tr><td class="strong">agents://generated</td><td><span class="tag tag-resource">resource</span></td><td>All current (published) agent definitions</td></tr>
+        <tr><td class="strong">agents://domain/{name}</td><td><span class="tag tag-resource">resource</span></td><td>Latest published agent for a specific domain</td></tr>
+        <tr><td class="strong">enhance_with_context</td><td><span class="tag tag-prompt">prompt</span></td><td>Meta-prompt template: wraps user input with retrieved team knowledge</td></tr>
+        <tr><td class="strong">use_agent/{domain}</td><td><span class="tag tag-prompt">prompt</span></td><td>Apply a generated domain-specialized agent persona to the current interaction</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- WEB UI -->
+  <div class="section">
+    <div class="section-label">Web UI</div>
+    <h2>Embedded Browser Interface</h2>
+    <p class="lead">React SPA compiled by Vite and embedded in the Go binary via <code>//go:embed dist/</code>. No separate frontend deployment. Served at <code>http://localhost:{port}</code> when the binary runs.</p>
+    <div class="ui-grid">
+      <div class="ui-card">
+        <div class="ui-page">/ Dashboard</div>
+        <div class="ui-desc">Entry count, cluster count, agent count, pipeline status, recent activity feed</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/knowledge</div>
+        <div class="ui-desc">Browse, search, and filter all entries. View detail, rate, edit. Cluster assignment visible.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/clusters</div>
+        <div class="ui-desc">Visual cluster map. Entry count per cluster. LLM-generated cluster summaries.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/datasets</div>
+        <div class="ui-desc">Versioned processed datasets. Before/after pipeline diffs. Download full datasets as JSON or CSV.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/agents</div>
+        <div class="ui-desc">All generated agents. Version history. Status (draft/published). Download individual or bulk ZIP.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/agents/:id</div>
+        <div class="ui-desc">Full agent definition. Source knowledge refs. Diff viewer between versions. Approve/reject draft.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/analytics</div>
+        <div class="ui-desc">Usage heatmaps, top entries, domain coverage gaps, contribution leaderboard.</div>
+      </div>
+      <div class="ui-card">
+        <div class="ui-page">/settings</div>
+        <div class="ui-desc">Team config, domain taxonomy, pipeline schedule, embedding provider, agent generation thresholds.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DATA MODEL -->
+  <div class="section">
+    <div class="section-label">Data Model</div>
+    <h2>Core Schemas</h2>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; flex-wrap:wrap;">
+      <div>
+        <div class="schema-block">
+          <div class="schema-header">struct KnowledgeEntry</div>
+          <div>
+            <div class="field-row"><span class="fn">ID</span><span class="ft">string</span><span class="fd">UUID</span></div>
+            <div class="field-row"><span class="fn">Type</span><span class="ft">KnowledgeType</span><span class="fd">prompt|pattern|workflow|domain_fact|anti_pattern</span></div>
+            <div class="field-row"><span class="fn">Title</span><span class="ft">string</span><span class="fd">Short label</span></div>
+            <div class="field-row"><span class="fn">Content</span><span class="ft">string</span><span class="fd">Embedded for semantic search</span></div>
+            <div class="field-row"><span class="fn">Domain</span><span class="ft">string</span><span class="fd">User-defined domain tag</span></div>
+            <div class="field-row"><span class="fn">ClusterID</span><span class="ft">*string</span><span class="fd">Assigned by analysis pipeline</span></div>
+            <div class="field-row"><span class="fn">Rating</span><span class="ft">RatingSummary</span><span class="fd">avg, count, distribution</span></div>
+            <div class="field-row"><span class="fn">Quality</span><span class="ft">float64</span><span class="fd">0–1, pipeline-scored</span></div>
+            <div class="field-row"><span class="fn">UsageCount</span><span class="ft">int</span><span class="fd">Incremented on retrieval</span></div>
+            <div class="field-row"><span class="fn">Version</span><span class="ft">int</span><span class="fd">Incremented on pipeline improvement</span></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="schema-block">
+          <div class="schema-header">struct Agent</div>
+          <div>
+            <div class="field-row"><span class="fn">ID</span><span class="ft">string</span><span class="fd">UUID</span></div>
+            <div class="field-row"><span class="fn">Version</span><span class="ft">int</span><span class="fd">Monotonic — v1, v2, v3…</span></div>
+            <div class="field-row"><span class="fn">Domain</span><span class="ft">string</span><span class="fd">Source cluster/domain</span></div>
+            <div class="field-row"><span class="fn">Name</span><span class="ft">string</span><span class="fd">"Earnings Analysis Agent v3"</span></div>
+            <div class="field-row"><span class="fn">SystemPrompt</span><span class="ft">string</span><span class="fd">LLM-generated system prompt</span></div>
+            <div class="field-row"><span class="fn">Instructions</span><span class="ft">[]string</span><span class="fd">Distilled do's from knowledge</span></div>
+            <div class="field-row"><span class="fn">AntiPatterns</span><span class="ft">[]string</span><span class="fd">What to avoid</span></div>
+            <div class="field-row"><span class="fn">SourceRefs</span><span class="ft">[]KnowledgeRef</span><span class="fd">Entries that informed this agent</span></div>
+            <div class="field-row"><span class="fn">Status</span><span class="ft">AgentStatus</span><span class="fd">draft | published</span></div>
+            <div class="field-row"><span class="fn">ChangeLog</span><span class="ft">[]string</span><span class="fd">What changed from prior version</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TECH STACK -->
+  <div class="section">
+    <div class="section-label">Tech Stack</div>
+    <h2>Technology Decisions</h2>
+    <div class="stack-grid">
+      <div class="stack-card">
+        <div class="stack-layer">Runtime</div>
+        <div class="stack-name">Go <span class="tag tag-go">go</span></div>
+        <div class="stack-note">Single binary; <code>go:embed</code> for UI; excellent goroutine concurrency for pipeline</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">MCP Protocol</div>
+        <div class="stack-name">mark3labs/mcp-go</div>
+        <div class="stack-note">Most mature Go MCP SDK; handles framing, schema, transport</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">Storage (v1)</div>
+        <div class="stack-name">SQLite + sqlite-vec</div>
+        <div class="stack-note">Zero external deps; embeds anywhere; vector search via extension</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">Storage (v2)</div>
+        <div class="stack-name">PostgreSQL + pgvector</div>
+        <div class="stack-note">Production scale, multi-instance, same query interface</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">Embeddings</div>
+        <div class="stack-name">Pluggable</div>
+        <div class="stack-note">Ollama (local/offline) or OpenAI text-embedding-3-small</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">LLM (pipeline)</div>
+        <div class="stack-name">Anthropic API <span class="tag tag-llm">llm</span></div>
+        <div class="stack-note">claude-haiku-4-5 for analysis; claude-sonnet-4-6 for agent generation</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">Frontend</div>
+        <div class="stack-name">React + Vite <span class="tag tag-react">react</span></div>
+        <div class="stack-note">TypeScript; compiled to static assets; embedded via <code>go:embed</code></div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">UI Components</div>
+        <div class="stack-name">shadcn/ui + Tailwind</div>
+        <div class="stack-note">Rapid, consistent dark-mode UI without custom CSS overhead</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-layer">Testing</div>
+        <div class="stack-name">Go testing + Vitest</div>
+        <div class="stack-note">Native test runners per layer; no cross-language test framework</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROADMAP -->
+  <div class="section">
+    <div class="section-label">Roadmap</div>
+    <h2>Development Phases</h2>
+    <div class="phase-list">
+      <div class="phase-row">
+        <div class="phase-num">Phase 1</div>
+        <div class="phase-body">
+          <div class="phase-name">Core MCP + Storage</div>
+          <div class="chips">
+            <span class="chip">Go binary scaffold</span>
+            <span class="chip">MCP server (stdio)</span>
+            <span class="chip">SQLite + sqlite-vec</span>
+            <span class="chip">knowledge_store / get / list / delete</span>
+            <span class="chip">Embedding service (Ollama)</span>
+            <span class="chip">Basic semantic search</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">Phase 2</div>
+        <div class="phase-body">
+          <div class="phase-name">Knowledge Analysis Pipeline</div>
+          <div class="chips">
+            <span class="chip">Background goroutine pipeline</span>
+            <span class="chip">Clustering</span>
+            <span class="chip">LLM deduplication</span>
+            <span class="chip">Quality scoring</span>
+            <span class="chip">LLM cluster summarization</span>
+            <span class="chip">Auto-tagging</span>
+            <span class="chip">Gap detection</span>
+            <span class="chip">Versioned dataset snapshots</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">Phase 3</div>
+        <div class="phase-body">
+          <div class="phase-name">Agent Generation Engine</div>
+          <div class="chips">
+            <span class="chip">LLM agent synthesis per cluster</span>
+            <span class="chip">Agent versioning + changelog</span>
+            <span class="chip">Draft / published states</span>
+            <span class="chip">Export: Claude subagent .md</span>
+            <span class="chip">Export: system prompt .txt</span>
+            <span class="chip">Export: JSON</span>
+            <span class="chip">agent_get / agent_list MCP tools</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">Phase 4</div>
+        <div class="phase-body">
+          <div class="phase-name">Embedded Web UI</div>
+          <div class="chips">
+            <span class="chip">React SPA scaffold (Vite)</span>
+            <span class="chip">Dashboard</span>
+            <span class="chip">Knowledge Browser</span>
+            <span class="chip">Clusters view</span>
+            <span class="chip">Datasets view</span>
+            <span class="chip">Agents + version diff viewer</span>
+            <span class="chip">Download flows</span>
+            <span class="chip">go:embed integration</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">Phase 5</div>
+        <div class="phase-body">
+          <div class="phase-name">REST API + Analytics + Team Model</div>
+          <div class="chips">
+            <span class="chip">Full REST API for UI</span>
+            <span class="chip">Team / user scoping</span>
+            <span class="chip">Role-based access</span>
+            <span class="chip">Usage analytics</span>
+            <span class="chip">Coverage gap view</span>
+            <span class="chip">Contribution leaderboard</span>
+            <span class="chip">Pipeline manual trigger</span>
+            <span class="chip">Settings page</span>
+          </div>
+        </div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">Phase 6</div>
+        <div class="phase-body">
+          <div class="phase-name">Prompt Enhancement + Polish</div>
+          <div class="chips">
+            <span class="chip">prompt_enhance / prompt_suggest</span>
+            <span class="chip">HTTP-SSE transport</span>
+            <span class="chip">OpenAI embedding provider</span>
+            <span class="chip">Structured logging</span>
+            <span class="chip">Health check endpoint</span>
+            <span class="chip">Docker / docker-compose</span>
+            <span class="chip">Seed data + onboarding</span>
+            <span class="chip">Full documentation</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OUT OF SCOPE -->
+  <div class="section">
+    <div class="section-label">Boundaries</div>
+    <h2>Out of Scope for v1</h2>
+    <div class="scope-grid">
+      <div class="scope-card">
+        <h3>Cross-Org Federation</h3>
+        <p>Trust and privacy models for sharing knowledge between organizations require dedicated design work.</p>
+      </div>
+      <div class="scope-card">
+        <h3>SSO / OAuth</h3>
+        <p>Basic team auth for v1. SSO deferred until team auth model is validated.</p>
+      </div>
+      <div class="scope-card">
+        <h3>Fine-Tuning / Training</h3>
+        <p>Neural model training on team data is a future research track once sufficient rated data exists.</p>
+      </div>
+      <div class="scope-card">
+        <h3>Real-time Push</h3>
+        <p>UI uses polling/manual refresh in v1. WebSocket push deferred to v2.</p>
+      </div>
+      <div class="scope-card">
+        <h3>Workflow Automation</h3>
+        <p>Agent runtime orchestration is out of scope. This system generates agents; clients execute them.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  <span>Tribal Knowledge MCP Server — Architecture Report v2 · June 2026</span>
+  <span>Markdown: <code>.planning/PROJECT.md</code> · Human report: <code>.planning/architecture-report.html</code></span>
+</footer>
+
+</body>
+</html>
