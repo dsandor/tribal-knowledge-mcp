@@ -421,6 +421,31 @@ export async function listUsers(): Promise<TeamUser[]> {
   return r.json();
 }
 
+export async function addUser(email: string, role: string): Promise<{ id: string }> {
+  const r = await apiFetch('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, role }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'add user failed');
+  }
+  return r.json();
+}
+
+export async function setUserRole(id: string, role: string): Promise<void> {
+  const r = await apiFetch(`/api/users/${id}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'set role failed');
+  }
+}
+
 // --- Knowledge (standalone helper) ---
 export async function fetchKnowledge(params?: Record<string, string>) {
   const q = new URLSearchParams(params ?? {});

@@ -27,6 +27,7 @@ const nav = [
   { to: '/pending', label: 'Pending Queue', Icon: Clock },
   { to: '/settings', label: 'Settings', Icon: Settings },
   { to: '/api-keys', label: 'API Keys', Icon: KeyRound },
+  { to: '/users', label: 'Users', Icon: Users },
   { to: '/admin/teams', label: 'Teams', Icon: Users },
   { to: '/admin/auth', label: 'Auth Config', Icon: ShieldCheck },
 ]
