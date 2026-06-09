@@ -80,6 +80,12 @@ func (m *mockAnalysisStore) ListSnapshots(_ context.Context) ([]storage.DatasetS
 	return m.snapshots, nil
 }
 func (m *mockAnalysisStore) RateEntry(_ context.Context, _ string, _ float64) error { return nil }
+func (m *mockAnalysisStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, _ int) ([]storage.PipelineRun, error) {
+	return nil, nil
+}
 
 // Store interface stubs — not exercised in pipeline tests.
 func (m *mockAnalysisStore) StoreEntry(_ context.Context, _ storage.KnowledgeEntry, _ []float32) (string, error) {

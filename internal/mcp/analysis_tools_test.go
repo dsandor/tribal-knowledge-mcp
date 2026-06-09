@@ -50,6 +50,12 @@ func (m *mockAnalysisStore) ListSnapshots(_ context.Context) ([]storage.DatasetS
 	return nil, nil
 }
 func (m *mockAnalysisStore) RateEntry(_ context.Context, _ string, _ float64) error { return nil }
+func (m *mockAnalysisStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, _ int) ([]storage.PipelineRun, error) {
+	return nil, nil
+}
 
 func TestHandleClusterList_ReturnsClusters(t *testing.T) {
 	store := &mockAnalysisStore{

@@ -1,0 +1,40 @@
+<h2>Where should API Keys management live?</h2>
+<p class="subtitle">The backend already has full CRUD for keys — this is about where users find it in the UI.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Standalone page — <code>/settings/api-keys</code></h3>
+      <p>Dedicated page linked from the sidebar under Settings. Full table, create dialog, revoke action. Same pattern as Teams and Auth Config pages.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>Room to grow (usage stats, expiry)</li><li>Easy to deep-link from docs</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>One more nav item</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Tab inside Settings page</h3>
+      <p>Settings gets a tab bar: General | API Keys. Keys table + create button lives in the API Keys tab.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>No new sidebar entry</li><li>Keeps admin config co-located</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Settings page grows; harder to deep-link</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Inside Admin Teams page</h3>
+      <p>API keys panel added to the existing Teams admin view, since keys are team-scoped.</p>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul><li>Mirrors team-centric data model</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Conflates two concerns; cramped</li><li>Hides user-level keys</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

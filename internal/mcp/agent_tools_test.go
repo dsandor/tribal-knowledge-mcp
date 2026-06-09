@@ -80,6 +80,10 @@ func (m *mockAgentStore) ListAgentVersions(_ context.Context, agentID string) ([
 	return out, nil
 }
 
+func (m *mockAgentStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+
 func testAgentStoreWithData() *mockAgentStore {
 	return &mockAgentStore{
 		agents: []storage.Agent{

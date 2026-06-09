@@ -1,0 +1,61 @@
+<h2>How should a newly created key be revealed?</h2>
+<p class="subtitle">The raw key is only returned once by the server — this is the only moment the user can copy it.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Modal with copy button</h3>
+      <p>After clicking "Create", a dialog appears showing the full key with a one-click copy button. User must close it manually — forcing them to acknowledge they copied it.</p>
+      <div class="mockup" style="margin-top:10px">
+        <div class="mockup-header">New API Key Created</div>
+        <div class="mockup-body" style="padding:16px">
+          <p style="font-size:12px;color:#aaa;margin:0 0 8px">Copy this key now — it will not be shown again.</p>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div style="font-family:monospace;background:#1a1a2e;padding:10px 14px;border-radius:6px;font-size:13px;color:#7dd3fc;flex:1;border:1px solid #334">tk_a1b2c3d4e5f6...</div>
+            <button class="mock-button" style="white-space:nowrap">Copy Key</button>
+          </div>
+          <p style="font-size:11px;color:#f59e0b;margin:10px 0 0">⚠ Store this key securely. Once you close this dialog it cannot be retrieved.</p>
+          <div style="text-align:right;margin-top:16px">
+            <button class="mock-button">I've copied it, close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Inline reveal row in the table</h3>
+      <p>After creation, the new key appears at the top of the table with the full value visible and a copy button. Row collapses to masked view (<code>tk_••••••••</code>) after the user clicks "Got it" or navigates away.</p>
+      <div class="mockup" style="margin-top:10px">
+        <div class="mockup-header">API Keys</div>
+        <div class="mockup-body" style="padding:0">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#1e293b;color:#94a3b8">
+              <th style="padding:8px 12px;text-align:left">Name</th>
+              <th style="padding:8px 12px;text-align:left">Key</th>
+              <th style="padding:8px 12px;text-align:left">Role</th>
+              <th style="padding:8px 12px;text-align:left">Actions</th>
+            </tr></thead>
+            <tbody>
+              <tr style="background:#0f2027;border-bottom:1px solid #1e3a5f">
+                <td style="padding:8px 12px;color:#fff">mcp-dev</td>
+                <td style="padding:8px 12px;font-family:monospace;color:#7dd3fc">tk_a1b2c3d4e5f6… <button class="mock-button" style="padding:2px 8px;font-size:11px">Copy</button></td>
+                <td style="padding:8px 12px;color:#86efac">admin</td>
+                <td style="padding:8px 12px"><button class="mock-button" style="padding:2px 8px;font-size:11px;background:#166534">Got it ✓</button></td>
+              </tr>
+              <tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:8px 12px;color:#cbd5e1">ci-pipeline</td>
+                <td style="padding:8px 12px;font-family:monospace;color:#475569">tk_••••••••</td>
+                <td style="padding:8px 12px;color:#fcd34d">curator</td>
+                <td style="padding:8px 12px"><button class="mock-button" style="padding:2px 8px;font-size:11px">Revoke</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

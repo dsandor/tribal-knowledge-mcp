@@ -211,9 +211,8 @@ function StepCreateAPIKey({ onNext }: { onNext: () => void }) {
     setError(null)
     try {
       const result = await createAPIKey(keyName.trim(), role, 'team')
-      // The API may return the key under different field names; try common ones.
-      const key: string =
-        result.key ?? result.api_key ?? result.token ?? result.value ?? ''
+      // raw_key is the plaintext key returned on creation (stored hashed server-side).
+      const key: string = result.raw_key ?? ''
       setGeneratedKey(key)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate API key.')

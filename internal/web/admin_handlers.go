@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
@@ -310,7 +312,10 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	rawKey := generateRawKey()
 	hash := auth.HashSHA256(rawKey)
+	keyID := uuid.NewString()
+	now := time.Now().UTC()
 	key := storage.APIKey{
+		ID:      keyID,
 		TeamID:  tc.TeamID,
 		UserID:  body.UserID,
 		KeyType: body.KeyType,
@@ -322,7 +327,14 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("create api key: %v", err))
 		return
 	}
-	writeJSON(w, map[string]string{"key": rawKey, "name": body.Name})
+	writeJSON(w, map[string]any{
+		"id":         keyID,
+		"raw_key":    rawKey,
+		"name":       body.Name,
+		"role":       body.Role,
+		"key_type":   body.KeyType,
+		"created_at": now.Format("2006-01-02T15:04:05Z"),
+	})
 }
 
 func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {

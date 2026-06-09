@@ -128,6 +128,7 @@ func (m *mockStore) ListTeams(_ context.Context) ([]storage.Team, error)        
 func (m *mockStore) SetTeamEnabled(_ context.Context, id string, enabled bool) error {
 	return nil
 }
+func (m *mockStore) UpdateTeam(_ context.Context, _ string, _ string, _ []string) error { return nil }
 func (m *mockStore) DeleteTeam(_ context.Context, id string) error { return nil }
 func (m *mockStore) UpsertUser(_ context.Context, u storage.User) (string, error) {
 	return "", nil
@@ -192,6 +193,12 @@ func (m *mockStore) SearchHybrid(_ context.Context, _ string, _ string, _ []floa
 }
 func (m *mockStore) BulkImport(_ context.Context, _ []storage.KnowledgeEntry) (int, int, []string, error) {
 	return 0, 0, nil, nil
+}
+func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) ListPipelineRuns(_ context.Context, _ int) ([]storage.PipelineRun, error) {
+	return nil, nil
 }
 
 // Compile-time check that *mockStore satisfies web.AllStore.

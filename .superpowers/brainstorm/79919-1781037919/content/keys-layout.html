@@ -1,0 +1,80 @@
+<h2>How should team vs user keys be organized?</h2>
+<p class="subtitle">The backend supports two key types: <strong>team</strong> (shared, no user_id) and <strong>user</strong> (tied to a specific user_id). How should the page present them?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Two sections — Team Keys + User Keys</h3>
+      <p>Page has two clearly labeled tables. "Create" buttons are separate per section. Makes the distinction obvious.</p>
+      <div class="mockup" style="margin-top:10px">
+        <div class="mockup-header">API Keys</div>
+        <div class="mockup-body" style="padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-weight:600;color:#e2e8f0">Team Keys</span>
+            <button class="mock-button" style="padding:4px 12px;font-size:12px">+ New Team Key</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px">
+            <thead><tr style="background:#1e293b;color:#94a3b8">
+              <th style="padding:6px 10px;text-align:left">Name</th><th style="padding:6px 10px;text-align:left">Key</th><th style="padding:6px 10px;text-align:left">Role</th><th style="padding:6px 10px;text-align:left">Created</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #1e293b"><td style="padding:6px 10px;color:#cbd5e1">ci-pipeline</td><td style="padding:6px 10px;font-family:monospace;color:#475569">tk_••••••</td><td style="padding:6px 10px;color:#fcd34d">curator</td><td style="padding:6px 10px;color:#64748b">2026-06-01</td><td><button class="mock-button" style="padding:2px 8px;font-size:11px">Revoke</button></td></tr>
+            </tbody>
+          </table>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-weight:600;color:#e2e8f0">User Keys</span>
+            <button class="mock-button" style="padding:4px 12px;font-size:12px">+ New User Key</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#1e293b;color:#94a3b8">
+              <th style="padding:6px 10px;text-align:left">Name</th><th style="padding:6px 10px;text-align:left">Key</th><th style="padding:6px 10px;text-align:left">User</th><th style="padding:6px 10px;text-align:left">Role</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #1e293b"><td style="padding:6px 10px;color:#cbd5e1">alice-dev</td><td style="padding:6px 10px;font-family:monospace;color:#475569">tk_••••••</td><td style="padding:6px 10px;color:#93c5fd">alice@co.com</td><td style="padding:6px 10px;color:#86efac">member</td><td><button class="mock-button" style="padding:2px 8px;font-size:11px">Revoke</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Single table with Type badge</h3>
+      <p>One unified table. A "Type" column shows a <span style="background:#1e3a5f;color:#7dd3fc;padding:1px 6px;border-radius:4px;font-size:11px">team</span> or <span style="background:#1a2e1a;color:#86efac;padding:1px 6px;border-radius:4px;font-size:11px">user</span> badge. Single "New Key" button opens a dialog where you pick the type.</p>
+      <div class="mockup" style="margin-top:10px">
+        <div class="mockup-header">API Keys</div>
+        <div class="mockup-body" style="padding:16px">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+            <button class="mock-button" style="padding:4px 12px;font-size:12px">+ New Key</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#1e293b;color:#94a3b8">
+              <th style="padding:6px 10px;text-align:left">Name</th><th style="padding:6px 10px;text-align:left">Type</th><th style="padding:6px 10px;text-align:left">Key</th><th style="padding:6px 10px;text-align:left">Role</th><th style="padding:6px 10px;text-align:left">User</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:6px 10px;color:#cbd5e1">ci-pipeline</td>
+                <td style="padding:6px 10px"><span style="background:#1e3a5f;color:#7dd3fc;padding:1px 6px;border-radius:4px;font-size:11px">team</span></td>
+                <td style="padding:6px 10px;font-family:monospace;color:#475569">tk_••••••</td>
+                <td style="padding:6px 10px;color:#fcd34d">curator</td>
+                <td style="padding:6px 10px;color:#475569">—</td>
+                <td><button class="mock-button" style="padding:2px 8px;font-size:11px">Revoke</button></td>
+              </tr>
+              <tr style="border-bottom:1px solid #1e293b">
+                <td style="padding:6px 10px;color:#cbd5e1">alice-dev</td>
+                <td style="padding:6px 10px"><span style="background:#1a2e1a;color:#86efac;padding:1px 6px;border-radius:4px;font-size:11px">user</span></td>
+                <td style="padding:6px 10px;font-family:monospace;color:#475569">tk_••••••</td>
+                <td style="padding:6px 10px;color:#86efac">member</td>
+                <td style="padding:6px 10px;color:#93c5fd">alice@co.com</td>
+                <td><button class="mock-button" style="padding:2px 8px;font-size:11px">Revoke</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

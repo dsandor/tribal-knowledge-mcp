@@ -371,13 +371,53 @@ export async function triggerPipeline() {
 }
 
 // --- API Keys ---
-export async function createAPIKey(name: string, role: string, keyType: string) {
+export interface APIKey {
+  id: string;
+  team_id: string;
+  user_id: string;
+  key_type: string;   // "team" | "user"
+  name: string;
+  role: string;
+  created_at: string;
+}
+
+export async function listAPIKeys(): Promise<APIKey[]> {
+  const r = await apiFetch('/api/api-keys');
+  if (!r.ok) throw new Error('list api keys failed');
+  return r.json();
+}
+
+export async function createAPIKey(
+  name: string,
+  role: string,
+  keyType: string,
+  userId?: string,
+): Promise<{ id: string; raw_key: string; name: string; role: string; key_type: string; created_at: string }> {
   const r = await apiFetch('/api/api-keys', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, role, key_type: keyType }),
+    body: JSON.stringify({ name, role, key_type: keyType, ...(userId ? { user_id: userId } : {}) }),
   });
   if (!r.ok) throw new Error('create api key failed');
+  return r.json();
+}
+
+export async function revokeAPIKey(id: string): Promise<void> {
+  const r = await apiFetch(`/api/api-keys/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('revoke api key failed');
+}
+
+export interface TeamUser {
+  id: string;
+  team_id: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+export async function listUsers(): Promise<TeamUser[]> {
+  const r = await apiFetch('/api/users');
+  if (!r.ok) throw new Error('list users failed');
   return r.json();
 }
 
