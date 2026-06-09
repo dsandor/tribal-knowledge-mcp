@@ -2,8 +2,10 @@ package web
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -121,7 +123,7 @@ func maxBodySize(next http.Handler) http.Handler {
 
 func (s *Server) routes() {
 	r := s.router
-	r.Use(chimw.Logger)
+	r.Use(slogRequestLogger)
 	r.Use(chimw.Recoverer)
 	r.Use(maxBodySize)
 	if s.rateLimitRPS > 0 {
@@ -266,4 +268,23 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.FileServerFS(s.staticFS).ServeHTTP(w, r)
+}
+
+// slogRequestLogger is a chi middleware that logs HTTP requests via slog (stderr).
+// It replaces chimw.Logger which writes to os.Stdout and would corrupt the MCP stdio transport.
+func slogRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+		start := time.Now()
+		defer func() {
+			slog.Info("http",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", ww.Status(),
+				"bytes", ww.BytesWritten(),
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+		}()
+		next.ServeHTTP(ww, r)
+	})
 }
