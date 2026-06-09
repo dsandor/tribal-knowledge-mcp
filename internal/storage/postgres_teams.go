@@ -56,10 +56,12 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 				key_type     TEXT NOT NULL DEFAULT 'team',
 				name         TEXT NOT NULL DEFAULT '',
 				key_hash     TEXT UNIQUE NOT NULL,
+				raw_key      TEXT NOT NULL DEFAULT '',
 				role         TEXT NOT NULL DEFAULT 'member',
 				created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				last_used_at TIMESTAMPTZ NULL
 			)`},
+		{"api_keys_raw_key", `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS raw_key TEXT NOT NULL DEFAULT ''`},
 		{"team_settings", `
 			CREATE TABLE IF NOT EXISTS team_settings (
 				team_id              TEXT PRIMARY KEY,
@@ -345,9 +347,9 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, key APIKey) error {
 		id = uuid.NewString()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, team_id, user_id, key_type, name, key_hash, role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, id, key.TeamID, key.UserID, key.KeyType, key.Name, key.KeyHash, key.Role)
+		INSERT INTO api_keys (id, team_id, user_id, key_type, name, key_hash, raw_key, role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, id, key.TeamID, key.UserID, key.KeyType, key.Name, key.KeyHash, key.RawKey, key.Role)
 	if err != nil {
 		return fmt.Errorf("create api key: %w", err)
 	}
@@ -356,7 +358,7 @@ func (s *PostgresStore) CreateAPIKey(ctx context.Context, key APIKey) error {
 
 func (s *PostgresStore) GetAPIKeyByHash(ctx context.Context, hash string) (*APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, team_id, user_id, key_type, name, key_hash, role, created_at, last_used_at
+		SELECT id, team_id, user_id, key_type, name, key_hash, raw_key, role, created_at, last_used_at
 		FROM api_keys WHERE key_hash = $1
 	`, hash)
 	k, err := scanAPIKeyPG(row)
@@ -374,12 +376,12 @@ func (s *PostgresStore) ListAPIKeys(ctx context.Context, teamID string) ([]APIKe
 	var err error
 	if teamID == "" {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, team_id, user_id, key_type, name, key_hash, role, created_at, last_used_at
+			SELECT id, team_id, user_id, key_type, name, key_hash, raw_key, role, created_at, last_used_at
 			FROM api_keys ORDER BY created_at DESC
 		`)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, team_id, user_id, key_type, name, key_hash, role, created_at, last_used_at
+			SELECT id, team_id, user_id, key_type, name, key_hash, raw_key, role, created_at, last_used_at
 			FROM api_keys WHERE team_id = $1 ORDER BY created_at DESC
 		`, teamID)
 	}
@@ -647,7 +649,7 @@ func scanAPIKeyPG(row rowScanner) (*APIKey, error) {
 	var lastUsedAt sql.NullTime
 	if err := row.Scan(
 		&k.ID, &k.TeamID, &k.UserID, &k.KeyType, &k.Name,
-		&k.KeyHash, &k.Role, &createdAt, &lastUsedAt,
+		&k.KeyHash, &k.RawKey, &k.Role, &createdAt, &lastUsedAt,
 	); err != nil {
 		return nil, err
 	}

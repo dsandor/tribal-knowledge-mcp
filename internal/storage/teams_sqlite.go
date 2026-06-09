@@ -252,9 +252,9 @@ func (s *SQLiteStore) CreateAPIKey(ctx context.Context, key APIKey) error {
 		id = uuid.NewString()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, team_id, user_id, key_type, name, key_hash, role)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, id, nullIfEmpty(key.TeamID), nullIfEmpty(key.UserID), key.KeyType, key.Name, key.KeyHash, key.Role)
+		INSERT INTO api_keys (id, team_id, user_id, key_type, name, key_hash, raw_key, role)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, nullIfEmpty(key.TeamID), nullIfEmpty(key.UserID), key.KeyType, key.Name, key.KeyHash, key.RawKey, key.Role)
 	if err != nil {
 		return fmt.Errorf("create api key: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *SQLiteStore) CreateAPIKey(ctx context.Context, key APIKey) error {
 
 func (s *SQLiteStore) GetAPIKeyByHash(ctx context.Context, hash string) (*APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, role, created_at, last_used_at
+		SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, COALESCE(raw_key,''), role, created_at, last_used_at
 		FROM api_keys WHERE key_hash = ?
 	`, hash)
 	k, err := scanAPIKey(row)
@@ -281,12 +281,12 @@ func (s *SQLiteStore) ListAPIKeys(ctx context.Context, teamID string) ([]APIKey,
 	var err error
 	if teamID == "" {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, role, created_at, last_used_at
+			SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, COALESCE(raw_key,''), role, created_at, last_used_at
 			FROM api_keys ORDER BY created_at DESC
 		`)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, role, created_at, last_used_at
+			SELECT id, COALESCE(team_id,''), COALESCE(user_id,''), key_type, name, key_hash, COALESCE(raw_key,''), role, created_at, last_used_at
 			FROM api_keys WHERE team_id = ? ORDER BY created_at DESC
 		`, teamID)
 	}
@@ -562,7 +562,7 @@ func scanAPIKey(row scanner) (*APIKey, error) {
 	var lastUsedAt *string
 	if err := row.Scan(
 		&k.ID, &k.TeamID, &k.UserID, &k.KeyType, &k.Name,
-		&k.KeyHash, &k.Role, &createdAt, &lastUsedAt,
+		&k.KeyHash, &k.RawKey, &k.Role, &createdAt, &lastUsedAt,
 	); err != nil {
 		return nil, err
 	}

@@ -378,6 +378,7 @@ export interface APIKey {
   key_type: string;   // "team" | "user"
   name: string;
   role: string;
+  raw_key?: string;   // present for keys created after raw-key retention was enabled
   created_at: string;
 }
 

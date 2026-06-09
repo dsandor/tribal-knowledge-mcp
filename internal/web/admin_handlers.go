@@ -252,11 +252,12 @@ func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		KeyType   string `json:"key_type"`
 		Name      string `json:"name"`
 		Role      string `json:"role"`
+		RawKey    string `json:"raw_key"`
 		CreatedAt string `json:"created_at"`
 	}
 	safe := make([]safeKey, len(keys))
 	for i, k := range keys {
-		safe[i] = safeKey{ID: k.ID, TeamID: k.TeamID, UserID: k.UserID, KeyType: k.KeyType, Name: k.Name, Role: k.Role, CreatedAt: k.CreatedAt.Format("2006-01-02T15:04:05Z")}
+		safe[i] = safeKey{ID: k.ID, TeamID: k.TeamID, UserID: k.UserID, KeyType: k.KeyType, Name: k.Name, Role: k.Role, RawKey: k.RawKey, CreatedAt: k.CreatedAt.Format("2006-01-02T15:04:05Z")}
 	}
 	writeJSON(w, safe)
 }
@@ -321,6 +322,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		KeyType: body.KeyType,
 		Name:    body.Name,
 		KeyHash: hash,
+		RawKey:  rawKey,
 		Role:    body.Role,
 	}
 	if err := s.store.CreateAPIKey(r.Context(), key); err != nil {

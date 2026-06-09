@@ -45,6 +45,7 @@ type APIKey struct {
 	KeyType    string // "team" | "user"
 	Name       string
 	KeyHash    string
+	RawKey     string // plaintext key, retained so it can be re-copied from the UI
 	Role       string // member|curator|admin|superadmin
 	CreatedAt  time.Time
 	LastUsedAt *time.Time

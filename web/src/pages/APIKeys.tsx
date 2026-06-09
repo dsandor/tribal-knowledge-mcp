@@ -20,6 +20,8 @@ import Alert from '@mui/material/Alert';
 import Snackbar from '@mui/material/Snackbar';
 import IconButton from '@mui/material/IconButton';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import {
   listAPIKeys, createAPIKey, revokeAPIKey, listUsers,
   type APIKey, type TeamUser,
@@ -133,6 +135,7 @@ function KeysSection({
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [revealedId, setRevealedId] = useState<string | null>(null);
 
   const handleRevoke = async (id: string) => {
     setRevoking(id);
@@ -147,11 +150,27 @@ function KeysSection({
     }
   };
 
-  const handleCopy = (raw: string) => {
-    navigator.clipboard.writeText(raw)
-      .then(() => setCopied(true))
-      .catch(() => {/* clipboard unavailable */});
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async (raw: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(raw);
+      } else {
+        // Fallback for insecure (non-HTTPS) contexts where navigator.clipboard is unavailable.
+        const ta = document.createElement('textarea');
+        ta.value = raw;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
   };
 
   const handleCreated = (key: NewKey) => {
@@ -243,9 +262,29 @@ function KeysSection({
               <TableRow key={k.id} hover>
                 <TableCell sx={{ fontWeight: 500 }}>{k.name}</TableCell>
                 <TableCell>
-                  <Typography sx={{ fontFamily: 'monospace', fontSize: 12, color: 'text.disabled' }}>
-                    tk_••••••••••••
-                  </Typography>
+                  {k.raw_key ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Typography sx={{ fontFamily: 'monospace', fontSize: 12, color: revealedId === k.id ? 'info.light' : 'text.disabled', wordBreak: 'break-all' }}>
+                        {revealedId === k.id ? k.raw_key : 'tk_••••••••••••'}
+                      </Typography>
+                      <IconButton
+                        size="small"
+                        onClick={() => setRevealedId(prev => (prev === k.id ? null : k.id))}
+                        title={revealedId === k.id ? 'Hide key' : 'Reveal key'}
+                      >
+                        {revealedId === k.id
+                          ? <VisibilityOffIcon sx={{ fontSize: 14 }} />
+                          : <VisibilityIcon sx={{ fontSize: 14 }} />}
+                      </IconButton>
+                      <IconButton size="small" onClick={() => handleCopy(k.raw_key!)} title="Copy key">
+                        <ContentCopyIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Box>
+                  ) : (
+                    <Typography sx={{ fontFamily: 'monospace', fontSize: 12, color: 'text.disabled' }} title="Created before key copy was supported; cannot be retrieved">
+                      tk_••••••••••••
+                    </Typography>
+                  )}
                 </TableCell>
                 {keyType === 'user' && (
                   <TableCell sx={{ fontSize: 12, color: 'info.light' }}>

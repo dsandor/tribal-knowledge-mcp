@@ -226,6 +226,7 @@ func (s *SQLiteStore) migrate() error {
 			key_type     TEXT NOT NULL DEFAULT 'team',
 			name         TEXT NOT NULL DEFAULT '',
 			key_hash     TEXT NOT NULL UNIQUE,
+			raw_key      TEXT NOT NULL DEFAULT '',
 			role         TEXT NOT NULL DEFAULT 'member',
 			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
 			last_used_at DATETIME
@@ -271,6 +272,7 @@ func (s *SQLiteStore) migrate() error {
 		"ALTER TABLE agents ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE agent_versions ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE rules ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE api_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''",
 	}
 	for _, alter := range phase5Alters {
 		if _, err := s.db.Exec(alter); err != nil {
