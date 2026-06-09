@@ -337,6 +337,59 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleAdminListAllUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.store.ListUsers(r.Context(), "")
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list users: %v", err))
+		return
+	}
+	type safeUser struct {
+		ID               string `json:"id"`
+		TeamID           string `json:"team_id"`
+		Email            string `json:"email"`
+		Name             string `json:"name"`
+		Role             string `json:"role"`
+		ManuallyAssigned bool   `json:"manually_assigned"`
+	}
+	safe := make([]safeUser, len(users))
+	for i, u := range users {
+		safe[i] = safeUser{ID: u.ID, TeamID: u.TeamID, Email: u.Email, Name: u.Name, Role: u.Role, ManuallyAssigned: u.ManuallyAssigned}
+	}
+	writeJSON(w, safe)
+}
+
+func (s *Server) handleAdminAssignUserTeam(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "id")
+	var body struct {
+		TeamID string `json:"team_id"`
+		Role   string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+	if body.TeamID == "" {
+		writeError(w, 400, "bad_request", "team_id required")
+		return
+	}
+	if body.Role == "" {
+		body.Role = "member"
+	}
+	if !validAdminRole[body.Role] {
+		writeError(w, 400, "bad_request", "invalid role: must be member, curator, or admin")
+		return
+	}
+	if _, err := s.store.GetTeam(r.Context(), body.TeamID); err != nil {
+		writeError(w, 404, "not_found", "team not found")
+		return
+	}
+	if err := s.store.AssignUserToTeam(r.Context(), userID, body.TeamID, body.Role); err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("assign user to team: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
 	targetID := chi.URLParam(r, "id")

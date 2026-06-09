@@ -209,6 +209,8 @@ func (s *Server) routes() {
 		r.Put("/api/admin/teams/{id}/enabled", s.handleSetTeamEnabled)
 		r.Delete("/api/admin/teams/{id}", s.handleDeleteTeam)
 		r.Get("/api/admin/teams/{id}/users", s.handleListTeamUsers)
+		r.Get("/api/admin/users", s.handleAdminListAllUsers)
+		r.Put("/api/admin/users/{id}/team", s.handleAdminAssignUserTeam)
 		r.Get("/api/admin/auth-config", s.handleGetAuthConfig)
 		r.Put("/api/admin/auth-config", s.handlePutAuthConfig)
 	})

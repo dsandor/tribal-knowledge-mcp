@@ -415,6 +415,33 @@ export interface TeamUser {
   role: string;
 }
 
+export interface AdminUser {
+  id: string;
+  team_id: string;
+  email: string;
+  name: string;
+  role: string;
+  manually_assigned: boolean;
+}
+
+export async function listAllUsers(): Promise<AdminUser[]> {
+  const r = await apiFetch('/api/admin/users');
+  if (!r.ok) throw new Error('list all users failed');
+  return r.json();
+}
+
+export async function assignUserTeam(id: string, teamId: string, role: string): Promise<void> {
+  const r = await apiFetch(`/api/admin/users/${id}/team`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ team_id: teamId, role }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'assign team failed');
+  }
+}
+
 export async function listUsers(): Promise<TeamUser[]> {
   const r = await apiFetch('/api/users');
   if (!r.ok) throw new Error('list users failed');

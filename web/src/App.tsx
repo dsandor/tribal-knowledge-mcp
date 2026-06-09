@@ -11,6 +11,7 @@ import Analytics from './pages/Analytics'
 import PendingQueue from './pages/PendingQueue'
 import Settings from './pages/Settings'
 import AdminTeams from './pages/AdminTeams'
+import AdminUsers from './pages/AdminUsers'
 import AuthConfig from './pages/AuthConfig'
 import Onboarding from './pages/Onboarding'
 import Import from './pages/Import'
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="pending" element={<PendingQueue />} />
           <Route path="settings" element={<Settings />} />
           <Route path="admin/teams" element={<AdminTeams />} />
+          <Route path="admin/users" element={<AdminUsers />} />
           <Route path="admin/auth" element={<AuthConfig />} />
           <Route path="import" element={<Import />} />
           <Route path="pipeline" element={<Pipeline />} />
