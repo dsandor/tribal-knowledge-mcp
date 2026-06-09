@@ -1,0 +1,131 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [Unreleased]
+
+### Added
+- **Knowledge Detail Editing, Curator Batch Actions & Search Highlighting (Phase 10)**
+  - Knowledge detail page: inline edit mode (title, content, type, domain, tags, description), save/cancel, delete with inline confirmation
+  - Similar entries panel on knowledge detail (top 3 semantic matches, hidden when empty)
+  - `PUT /api/knowledge/:id` and `DELETE /api/knowledge/:id` endpoints
+  - PendingQueue: full dark-theme rewrite, checkbox multi-select, bulk approve/reject, skeleton loading states
+  - `POST /api/knowledge/batch-approve` and `POST /api/knowledge/batch-reject` endpoints (curator role)
+  - Knowledge Browser: search snippet extraction (centered on first match), query term highlighting in amber, search mode badge
+- **Security fixes**
+  - CSV formula injection: `csvSafeCell()` prefixes formula-trigger characters (`=`, `+`, `-`, `@`) with a single quote in export output
+  - Rate-limit XFF bypass: `X-Forwarded-For` ignored by default; opt-in with `TRUST_XFF=true` (rightmost-entry policy, not leftmost)
+- **Bulk Import, Hybrid Search & Production Hardening (Phase 9)**
+  - `POST /api/knowledge/import` — accepts JSON array or CSV file; deduplicates by title; returns `{imported, skipped, errors}`
+  - `GET /api/knowledge/export` — streams all matching entries as JSON or CSV; supports `domain`, `type`, `tag` filters
+  - Hybrid search (`SearchHybrid`): FTS4 (SQLite) / tsvector (PostgreSQL) + vector cosine; `?mode=hybrid|semantic|keyword` on knowledge list endpoint
+  - Rate limiting middleware: token-bucket per IP, configurable via `RATE_LIMIT_RPS` (default 60 req/min), returns `429` with `Retry-After` header
+  - Request size guard: 1 MB body limit on all POST/PUT handlers
+  - Consistent JSON error responses: `{"error":"...", "code":"..."}` on all 4xx/5xx
+  - Import UI page: JSON paste with preview table + drag-and-drop CSV upload
+  - Knowledge Browser: hybrid/semantic/keyword search mode toggle with contextual hints
+- **Prompt Feedback & Active Learning (Phase 8)**
+  - `knowledge_use` MCP tool: records when a suggestion is accepted by a client
+  - `GET /api/knowledge/trending` — top entries by signal score (7d/30d usage + outcome ratings)
+  - `GET /api/activity` — paginated team activity feed (stores, ratings, approvals, pipeline events, improvement drafts)
+  - Weak-signal improvement pipeline stage: entries with ≥3 outcome ratings averaging ≤2.5/5 are rewritten by claude-haiku and stored as curator-review drafts
+  - Dashboard "Trending This Week" widget (signal score, 7-day usage count)
+  - Dashboard "Team Activity" widget (30-second polling, event type indicators, relative timestamps)
+  - Storage: `usage_events`, `outcome_ratings`, `feed_activity` tables (SQLite + PostgreSQL)
+- Structured logging via `log/slog` with `LOG_LEVEL` env var (debug/info/warn/error)
+- Enhanced `/health` endpoint with JSON component status (storage, embedding, pipeline)
+- Graceful shutdown: in-flight HTTP drain (15s timeout) + pipeline stage completion
+- Multi-stage `Dockerfile` with CGO/sqlite-vec support (debian:bookworm-slim runtime)
+- `docker-compose.yml` with PostgreSQL + pgvector as default service, optional Ollama sidecar
+- `.env.example` documenting all environment variables
+- `scripts/seed.py`: seeds 9 realistic knowledge entries across 3 domains
+- `README.md`: installation, MCP config snippets, env var reference, architecture diagram
+- **PostgreSQL + pgvector storage adapter** — `PostgresStore` implements all storage interfaces; `DATABASE_URL` env var selects Postgres vs SQLite at startup
+- `run.sh`: starts a Docker-managed PostgreSQL container then launches the server via `go run`; usable directly as a Claude Desktop MCP command
+- Makefile `image` target: builds and tags Docker image locally
+- Makefile `deploy` target: builds, tags, and pushes to a container registry (`REGISTRY`, `IMAGE`, `VERSION` variables)
+
+---
+
+## Phase 5 — REST API, Analytics & Team Model (2026-06-07)
+
+### Added
+- chi router with REST endpoints: `/api/knowledge`, `/api/clusters`, `/api/agents`, `/api/pipeline`, `/api/analytics`, `/api/settings`
+- Multi-tenant team scoping on all knowledge, agents, and API keys
+- Role-based access control: `superadmin`, `admin`, `curator`, `member`
+- API key authentication (team-scoped and per-user); SHA-256 hashed, never stored plaintext
+- Analytics endpoints: usage heatmaps, domain coverage gaps, contribution leaderboard
+- Curator approval queue for agent draft → published workflow
+- Settings GET/PUT for team configuration
+- HTTP/SSE MCP transport for remote client connections (`MCP_HTTP_ADDR`)
+- MCP tools: `knowledge_search`, `knowledge_rate`, `prompt_suggest`, `enhance_with_context`
+- MCP resources: `knowledge://team/top`, `knowledge://team/recent`, `knowledge://domain/{name}`, `knowledge://cluster/{id}`
+- React analytics and settings pages wired to live REST data
+- `DEV_BYPASS_AUTH=true` development bypass that injects superadmin context
+- `SUPERADMIN_KEY` env var for production bootstrap of first superadmin API key
+- OIDC login flow with CSRF state validation
+
+---
+
+## Phase 4 — Embedded Web UI (2026-06-06)
+
+### Added
+- React 18 + TypeScript + Vite SPA compiled and embedded in Go binary via `//go:embed`
+- shadcn/ui + Tailwind dark theme
+- Pages: Dashboard, Knowledge Browser, Knowledge Detail, Clusters, Datasets, Agents, Agent Detail
+- Agent Detail: full definition, source refs, version diff viewer, approve/reject draft
+- Download flows: single agent export in Claude subagent MD, plain TXT, and JSON formats
+- Go HTTP handler serving embedded `web/dist/` with SPA fallback routing
+- Makefile with `make web`, `make build`, `make test`, `make clean` targets
+
+---
+
+## Phase 3 — Agent Generation Engine (2026-06-06)
+
+### Added
+- `internal/agent` package: LLM-driven agent synthesis from knowledge clusters
+- Agent schema: ID, Version, Domain, SystemPrompt, Instructions, AntiPatterns, SourceRefs, Status, ChangeLog
+- Monotonic agent versioning with full history preserved in `agent_versions` table
+- Diff engine: compare agent versions, produce human-readable changelog
+- Draft / published states with curator approval gate
+- Export formats: Claude subagent `.md`, plain `.txt`, structured `.json`
+- SQLite `agents` and `agent_versions` schema additions
+- MCP tools: `agent_get`, `agent_list`, `agent_publish`, `agent_export`
+- MCP resources: `agents://generated`, `agents://domain/{name}`
+- Pipeline `WithAgentGeneration` hook: generates agents after cluster summarization
+- `StoreAgentVersion` uses `INSERT OR IGNORE` for UNIQUE safety
+
+---
+
+## Phase 2 — Knowledge Analysis Pipeline (2026-06-05)
+
+### Added
+- Background pipeline goroutine: configurable trigger (entry count threshold + time interval)
+- Cosine similarity clustering over stored embeddings
+- Quality scoring formula: `(rating × usage_count) + coherence + specificity`
+- LLM cluster summarization via claude-haiku-4-5
+- Auto-tagging: LLM-suggested domain and tag improvements
+- Coverage gap detection: domains below entry threshold surfaced
+- Versioned dataset snapshots persisted to storage
+- SQLite schema additions: `clusters`, `pipeline_runs`, `dataset_snapshots`
+- MCP tools: `cluster_list`, `analysis_status`
+- Anthropic raw HTTP client with rate limiting and retry logic
+- `AnalysisStore` interface for all pipeline storage operations
+- Near-duplicate detection via clustering
+
+---
+
+## Phase 1 — Core MCP + Storage (2026-06-05)
+
+### Added
+- Go module scaffold: `github.com/dsandor/memory`
+- SQLite + sqlite-vec database with schema: `entries`, `embeddings`, `users`, `teams`
+- Embedding service abstraction with Ollama provider
+- MCP server over stdio transport using mark3labs/mcp-go
+- MCP tools: `knowledge_store`, `knowledge_get`, `knowledge_list`, `knowledge_delete`
+- Semantic search: vector similarity top-K via sqlite-vec
+- Config loading from environment variables with validation
+- Unit tests for storage and embedding layers

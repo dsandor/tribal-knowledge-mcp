@@ -1,0 +1,570 @@
+package web
+
+import (
+	"archive/zip"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+
+	agentpkg "github.com/dsandor/memory/internal/agent"
+	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/storage"
+)
+
+// StatsResponse is the JSON shape returned by GET /api/stats.
+type StatsResponse struct {
+	KnowledgeCount  int     `json:"knowledge_count"`
+	ClusterCount    int     `json:"cluster_count"`
+	AgentCount      int     `json:"agent_count"`
+	PipelineStatus  string  `json:"pipeline_status"`
+	PipelineLastRun *string `json:"pipeline_last_run"`
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	count, err := s.store.CountEntries(ctx)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("count entries: %v", err))
+		return
+	}
+	clusters, err := s.store.ListClusters(ctx)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
+		return
+	}
+	agents, err := s.store.ListAgents(ctx)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
+		return
+	}
+	run, err := s.store.GetLatestPipelineRun(ctx)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
+		return
+	}
+
+	resp := StatsResponse{
+		KnowledgeCount: count,
+		ClusterCount:   len(clusters),
+		AgentCount:     len(agents),
+		PipelineStatus: "idle",
+	}
+	if run != nil {
+		resp.PipelineStatus = run.Status
+		t := run.StartedAt.Format("2006-01-02T15:04:05Z")
+		resp.PipelineLastRun = &t
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit == 0 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+
+	filter := storage.ListFilter{
+		Domain: q.Get("domain"),
+		Status: q.Get("status"),
+		Type:   storage.KnowledgeType(q.Get("type")),
+		Limit:  limit,
+		Offset: offset,
+		Search: q.Get("search"),
+	}
+	entries, err := s.store.ListEntries(r.Context(), filter)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list entries: %v", err))
+		return
+	}
+	if entries == nil {
+		entries = []storage.KnowledgeEntry{}
+	}
+	writeJSON(w, entries)
+}
+
+func (s *Server) handleKnowledgeGet(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.store.GetEntry(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get entry: %v", err))
+		return
+	}
+	writeJSON(w, entry)
+}
+
+func (s *Server) handleKnowledgeRate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Rating float64 `json:"rating"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+	if body.Rating < 0 || body.Rating > 5 {
+		writeError(w, 400, "bad_request", "rating must be between 0 and 5")
+		return
+	}
+	if err := s.store.RateEntry(r.Context(), chi.URLParam(r, "id"), body.Rating); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("rate entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleClusterList(w http.ResponseWriter, r *http.Request) {
+	clusters, err := s.store.ListClusters(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
+		return
+	}
+	if clusters == nil {
+		clusters = []storage.Cluster{}
+	}
+	writeJSON(w, clusters)
+}
+
+func (s *Server) handleDatasetList(w http.ResponseWriter, r *http.Request) {
+	snaps, err := s.store.ListSnapshots(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list snapshots: %v", err))
+		return
+	}
+	if snaps == nil {
+		snaps = []storage.DatasetSnapshot{}
+	}
+	writeJSON(w, snaps)
+}
+
+func (s *Server) handleDatasetExport(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
+	}
+
+	snaps, err := s.store.ListSnapshots(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list snapshots: %v", err))
+		return
+	}
+	var snap *storage.DatasetSnapshot
+	for i := range snaps {
+		if snaps[i].ID == id {
+			snap = &snaps[i]
+			break
+		}
+	}
+	if snap == nil {
+		writeError(w, 404, "not_found", "snapshot not found")
+		return
+	}
+
+	switch format {
+	case "json":
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="snapshot-v%d.json"`, snap.Version))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, snap.Data)
+	case "csv":
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="snapshot-v%d.csv"`, snap.Version))
+		w.Header().Set("Content-Type", "text/csv")
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"id", "version", "cluster_count", "entry_count", "pipeline_run_id", "created_at"})
+		_ = cw.Write([]string{
+			snap.ID, strconv.Itoa(snap.Version),
+			strconv.Itoa(snap.ClusterCount), strconv.Itoa(snap.EntryCount),
+			snap.PipelineRunID, snap.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+		cw.Flush()
+	default:
+		writeError(w, 400, "bad_request", "format must be json or csv")
+	}
+}
+
+func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
+		return
+	}
+	if agents == nil {
+		agents = []storage.Agent{}
+	}
+	writeJSON(w, agents)
+}
+
+func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	a, err := s.store.GetAgent(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
+		return
+	}
+	versions, err := s.store.ListAgentVersions(ctx, id)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list agent versions: %v", err))
+		return
+	}
+	if versions == nil {
+		versions = []storage.AgentVersion{}
+	}
+	writeJSON(w, map[string]any{"agent": a, "versions": versions})
+}
+
+func (s *Server) handleAgentPublish(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.PublishAgent(r.Context(), chi.URLParam(r, "id")); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("publish agent: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAgentExport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "md"
+	}
+
+	a, err := s.store.GetAgent(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
+		return
+	}
+
+	var contentType, ext string
+	switch format {
+	case "md":
+		contentType, ext = "text/markdown", "md"
+	case "txt":
+		contentType, ext = "text/plain", "txt"
+	case "json":
+		contentType, ext = "application/json", "json"
+	default:
+		writeError(w, 400, "bad_request", "format must be md, txt, or json")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-agent.%s"`, a.Domain, ext))
+	fmt.Fprint(w, agentpkg.Export(a, format))
+}
+
+func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
+	if s.agentLLM == nil {
+		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
+		return
+	}
+
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	var body struct {
+		Feedback string `json:"feedback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len([]rune(body.Feedback)) < 5 {
+		writeError(w, 400, "bad_request", "feedback must be at least 5 characters")
+		return
+	}
+
+	current, err := s.store.GetAgent(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
+		return
+	}
+
+	// Load relevant knowledge entries for context (same domain, up to 20).
+	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20})
+
+	revised, err := agentpkg.Refactor(ctx, s.agentLLM, current, entries, body.Feedback)
+	if err != nil {
+		writeError(w, 500, "llm_error", fmt.Sprintf("refactor failed: %v", err))
+		return
+	}
+
+	newID, err := s.store.UpsertAgent(ctx, *revised)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("save agent: %v", err))
+		return
+	}
+
+	_ = s.store.StoreAgentVersion(ctx, storage.AgentVersion{
+		AgentID:      newID,
+		Version:      revised.Version,
+		SystemPrompt: revised.SystemPrompt,
+		Instructions: revised.Instructions,
+		AntiPatterns: revised.AntiPatterns,
+		Changelog:    fmt.Sprintf("User feedback: %s", body.Feedback),
+	})
+
+	result, err := s.store.GetAgent(ctx, newID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "fetch revised agent failed")
+		return
+	}
+	writeJSON(w, map[string]any{"agent": result})
+}
+
+func (s *Server) handleAgentBulkExport(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="agents-export.zip"`)
+
+	zw := zip.NewWriter(w)
+	for i := range agents {
+		for _, format := range []string{"md", "txt", "json"} {
+			f, err := zw.Create(fmt.Sprintf("%s/agent.%s", agents[i].Domain, format))
+			if err != nil {
+				continue
+			}
+			fmt.Fprint(f, agentpkg.Export(&agents[i], format))
+		}
+	}
+	_ = zw.Close()
+}
+
+func (s *Server) handlePipelineStatus(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.GetLatestPipelineRun(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
+		return
+	}
+	if run == nil {
+		writeJSON(w, map[string]any{"status": "idle"})
+		return
+	}
+	writeJSON(w, run)
+}
+
+func (s *Server) handleListPipelineRuns(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 20
+	if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+		limit = n
+	}
+	runs, err := s.store.ListPipelineRuns(r.Context(), limit)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list pipeline runs: %v", err))
+		return
+	}
+	if runs == nil {
+		runs = []storage.PipelineRun{}
+	}
+	writeJSON(w, runs)
+}
+
+func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
+	tc := auth.GetTeamContext(r.Context())
+	var body struct {
+		Title       string   `json:"title"`
+		Content     string   `json:"content"`
+		Type        string   `json:"type"`
+		Domain      string   `json:"domain"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Tags        []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+	if body.Title == "" || body.Content == "" || body.Type == "" {
+		writeError(w, 400, "bad_request", "title, content, and type are required")
+		return
+	}
+	entry := storage.KnowledgeEntry{
+		Type:        storage.KnowledgeType(body.Type),
+		Title:       body.Title,
+		Content:     body.Content,
+		Description: body.Description,
+		Domain:      body.Domain,
+		Author:      body.Author,
+		Team:        tc.TeamID,
+		TeamID:      tc.TeamID,
+		Tags:        body.Tags,
+		Status:      "pending",
+	}
+	id, err := s.store.StoreEntry(r.Context(), entry, nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("store entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]string{"id": id})
+}
+
+func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := s.store.GetEntry(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get entry: %v", err))
+		return
+	}
+	var body struct {
+		Title       string   `json:"title"`
+		Content     string   `json:"content"`
+		Description string   `json:"description"`
+		Domain      string   `json:"domain"`
+		Tags        []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+	if body.Title != "" {
+		existing.Title = body.Title
+	}
+	if body.Content != "" {
+		existing.Content = body.Content
+	}
+	if body.Description != "" {
+		existing.Description = body.Description
+	}
+	if body.Domain != "" {
+		existing.Domain = body.Domain
+	}
+	if body.Tags != nil {
+		existing.Tags = body.Tags
+	}
+	if err := s.store.UpdateEntry(r.Context(), *existing); err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("update entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("delete entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleKnowledgeApprove(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.ApproveEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("approve entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleKnowledgeReject(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.RejectEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "entry not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("reject entry: %v", err))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleClusterGet(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	clusters, err := s.store.ListClusters(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
+		return
+	}
+	for _, c := range clusters {
+		if c.ID == id {
+			writeJSON(w, c)
+			return
+		}
+	}
+	writeError(w, 404, "not_found", "cluster not found")
+}
+
+func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	clusters, err := s.store.ListClusters(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
+		return
+	}
+	for _, c := range clusters {
+		if c.ID == id {
+			writeJSON(w, map[string]string{"summary": c.Summary})
+			return
+		}
+	}
+	writeError(w, 404, "not_found", "cluster not found")
+}
+
+func (s *Server) handleAgentLatestByDomain(w http.ResponseWriter, r *http.Request) {
+	domain := chi.URLParam(r, "domain")
+	agent, err := s.store.GetAgentByDomain(r.Context(), domain)
+	if err != nil || agent == nil {
+		writeError(w, 404, "not_found", "no agent for domain")
+		return
+	}
+	writeJSON(w, agent)
+}
+
+func (s *Server) handlePipelineTrigger(w http.ResponseWriter, r *http.Request) {
+	if s.triggerPipeline != nil {
+		select {
+		case s.triggerPipeline <- struct{}{}:
+			writeJSON(w, map[string]string{"status": "triggered"})
+		default:
+			writeJSON(w, map[string]string{"status": "already_running"})
+		}
+		return
+	}
+	writeError(w, 503, "internal_error", "pipeline not configured")
+}

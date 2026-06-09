@@ -193,3 +193,153 @@ func TestEntryTimestamps(t *testing.T) {
 		t.Errorf("CreatedAt %v outside expected range [%v, %v]", ts, before, after)
 	}
 }
+
+// storeTestEntry stores an entry with the given title/content and returns its ID.
+func storeTestEntry(t *testing.T, s storage.Store, title, content string) string {
+	t.Helper()
+	e := storage.KnowledgeEntry{
+		Type:    storage.KTPrompt,
+		Title:   title,
+		Content: content,
+		Domain:  "test",
+		Tags:    []string{},
+		Author:  "tester",
+		Team:    "test-team",
+	}
+	id, err := s.StoreEntry(context.Background(), e, []float32{0.1, 0.2, 0.3, 0.4})
+	if err != nil {
+		t.Fatalf("storeTestEntry %q: %v", title, err)
+	}
+	return id
+}
+
+func TestRateEntry(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	id := storeTestEntry(t, s, "Rate me", "rate content")
+
+	if err := s.RateEntry(ctx, id, 4.5); err != nil {
+		t.Fatalf("RateEntry: %v", err)
+	}
+	e, err := s.GetEntry(ctx, id)
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if e.Rating != 4.5 {
+		t.Errorf("Rating = %v, want 4.5", e.Rating)
+	}
+}
+
+func TestRateEntry_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.RateEntry(context.Background(), "nonexistent-id", 3.0)
+	if err == nil {
+		t.Fatal("expected error for missing entry")
+	}
+}
+
+func TestListEntries_OffsetAndSearch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for _, title := range []string{"Alpha analytics", "Beta reporting", "Gamma forecast"} {
+		storeTestEntry(t, s, title, "content about "+title)
+	}
+
+	all, _ := s.ListEntries(ctx, storage.ListFilter{Limit: 10})
+	second, _ := s.ListEntries(ctx, storage.ListFilter{Limit: 10, Offset: 1})
+	if len(second) != len(all)-1 {
+		t.Errorf("offset 1: want %d entries, got %d", len(all)-1, len(second))
+	}
+
+	results, err := s.ListEntries(ctx, storage.ListFilter{Limit: 10, Search: "Alpha"})
+	if err != nil {
+		t.Fatalf("ListEntries search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("search 'Alpha': want 1 result, got %d", len(results))
+	}
+	if results[0].Title != "Alpha analytics" {
+		t.Errorf("wrong entry: %q", results[0].Title)
+	}
+}
+
+func TestApproveAndRejectEntry(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Store a test entry using existing helpers
+	entry := storage.KnowledgeEntry{
+		Type:    storage.KTPrompt,
+		Title:   "pending entry",
+		Content: "content",
+		Domain:  "test",
+	}
+	id, err := s.StoreEntry(ctx, entry, nil)
+	if err != nil {
+		t.Fatalf("StoreEntry: %v", err)
+	}
+
+	// default status should be "approved" for migration compat
+	e, err := s.GetEntry(ctx, id)
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if e.Status != "approved" {
+		t.Errorf("default Status = %q, want approved", e.Status)
+	}
+
+	if err := s.RejectEntry(ctx, id); err != nil {
+		t.Fatalf("RejectEntry: %v", err)
+	}
+	e, _ = s.GetEntry(ctx, id)
+	if e.Status != "rejected" {
+		t.Errorf("Status after reject = %q", e.Status)
+	}
+
+	if err := s.ApproveEntry(ctx, id); err != nil {
+		t.Fatalf("ApproveEntry: %v", err)
+	}
+	e, _ = s.GetEntry(ctx, id)
+	if e.Status != "approved" {
+		t.Errorf("Status after approve = %q", e.Status)
+	}
+}
+
+func TestListEntries_StatusFilter(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	entry := storage.KnowledgeEntry{Type: storage.KTPrompt, Title: "pending", Content: "content", Domain: "test"}
+	id, _ := s.StoreEntry(ctx, entry, nil)
+	_ = s.RejectEntry(ctx, id)
+
+	pending, _ := s.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "rejected"})
+	approved, _ := s.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "approved"})
+
+	if len(pending) != 1 {
+		t.Errorf("rejected filter: want 1, got %d", len(pending))
+	}
+	if len(approved) != 0 {
+		t.Errorf("approved filter: want 0, got %d", len(approved))
+	}
+}
+
+func TestUpdateEntry(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	entry := storage.KnowledgeEntry{Type: storage.KTPrompt, Title: "original title", Content: "original content", Domain: "test"}
+	id, _ := s.StoreEntry(ctx, entry, nil)
+
+	e, _ := s.GetEntry(ctx, id)
+	e.Title = "updated title"
+	e.Content = "updated content"
+	if err := s.UpdateEntry(ctx, *e); err != nil {
+		t.Fatalf("UpdateEntry: %v", err)
+	}
+	got, _ := s.GetEntry(ctx, id)
+	if got.Title != "updated title" {
+		t.Errorf("Title = %q", got.Title)
+	}
+}

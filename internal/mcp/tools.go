@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -9,6 +11,13 @@ import (
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
+
+// storeResult is the JSON shape returned by the knowledge_store tool.
+type storeResult struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
 
 func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -20,15 +29,51 @@ func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func
 			return mcplib.NewToolResultError("title, content, and type are required"), nil
 		}
 
+		// Dedup check: skip embedding if identical content already exists.
+		hash := contentHash(title + content)
+		existing, err := store.GetEntryByContentHash(ctx, hash)
+		if err != nil {
+			// log content hash lookup failures but continue — StoreEntry will surface any real DB errors
+			_ = err
+		}
+		if existing != nil {
+			out, _ := json.Marshal(storeResult{ID: existing.ID, Status: "already_exists", Message: "Entry already exists with this title and content."})
+			return mcplib.NewToolResultText(string(out)), nil
+		}
+
+		// dry_run: validate and preview without storing (runs after dedup so duplicates still surface as already_exists).
+		domain := req.GetString("domain", "")
+		description := req.GetString("description", "")
+		author := req.GetString("author", "")
+		team := req.GetString("team", "")
+		tags := tagsFromArgs(req.GetArguments(), "tags")
+
+		if req.GetBool("dry_run", false) {
+			preview := map[string]any{
+				"status":       "preview",
+				"title":        title,
+				"content":      content,
+				"type":         entryType,
+				"domain":       domain,
+				"description":  description,
+				"author":       author,
+				"team":         team,
+				"tags":         tags,
+				"content_hash": hash,
+			}
+			out, _ := json.Marshal(preview)
+			return mcplib.NewToolResultText(string(out)), nil
+		}
+
 		entry := storage.KnowledgeEntry{
 			Type:        storage.KnowledgeType(entryType),
 			Title:       title,
 			Content:     content,
-			Description: req.GetString("description", ""),
-			Domain:      req.GetString("domain", ""),
-			Author:      req.GetString("author", ""),
-			Team:        req.GetString("team", ""),
-			Tags:        tagsFromArgs(req.GetArguments(), "tags"),
+			Description: description,
+			Domain:      domain,
+			Author:      author,
+			Team:        team,
+			Tags:        tags,
 		}
 
 		emb, err := embedder.Embed(ctx, content)
@@ -41,8 +86,16 @@ func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func
 			return mcplib.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 		}
 
-		return mcplib.NewToolResultText(fmt.Sprintf("stored entry with id=%s", id)), nil
+		out, _ := json.Marshal(storeResult{ID: id, Status: "stored"})
+		return mcplib.NewToolResultText(string(out)), nil
 	}
+}
+
+// contentHash returns the lowercase hex-encoded SHA-256 digest of s.
+// mirrors storage.sha256Hex — keep in sync.
+func contentHash(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 func HandleKnowledgeGet(store storage.Store) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {

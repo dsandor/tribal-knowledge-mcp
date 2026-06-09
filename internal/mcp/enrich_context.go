@@ -1,0 +1,196 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/llm"
+	"github.com/dsandor/memory/internal/storage"
+	mcplib "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+)
+
+// RegisterEnrichContext registers the enrich_context tool with the MCP server.
+// llmClient may be nil; in that case the improved_prompt is the rule-enhanced version only.
+func RegisterEnrichContext(s *server.MCPServer, store storage.Store, embedder embedding.Embedder, llmClient llm.Client) {
+	s.AddTool(
+		mcplib.NewTool("enrich_context",
+			mcplib.WithDescription("ALWAYS call this FIRST, at the start of every user turn, before planning or drafting a response. Pass the raw user message plus optional team/category/user context. Returns improved_prompt (enhanced with applicable rules), applicable_rules (rule titles and content), relevant_knowledge (top matching entries with IDs), and missing_inputs (checklist of any context that would help). Idempotent and cheap — when in doubt, call it."),
+			mcplib.WithString("prompt", mcplib.Required(), mcplib.Description("The raw user message or task description")),
+			mcplib.WithString("team", mcplib.Description("Team identifier for scoping rules")),
+			mcplib.WithString("category", mcplib.Description("Domain/category for scoping rules and knowledge search")),
+			mcplib.WithString("user", mcplib.Description("User identifier for user-scoped rules")),
+		),
+		HandleEnrichContext(store, embedder, llmClient),
+	)
+}
+
+// enrichContextRule is the JSON-serializable form of a matched rule.
+type enrichContextRule struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	Scope   string `json:"scope"`
+}
+
+// enrichContextKnowledge is the JSON-serializable form of a matched knowledge entry.
+type enrichContextKnowledge struct {
+	ID      string  `json:"id"`
+	Title   string  `json:"title"`
+	Score   float64 `json:"score"`
+	Domain  string  `json:"domain"`
+	Content string  `json:"content"`
+}
+
+// enrichContextResponse is the top-level response returned by enrich_context.
+type enrichContextResponse struct {
+	ImprovedPrompt    string                   `json:"improved_prompt"`
+	ApplicableRules   []enrichContextRule      `json:"applicable_rules"`
+	RelevantKnowledge []enrichContextKnowledge `json:"relevant_knowledge"`
+	MissingInputs     []string                 `json:"missing_inputs"`
+}
+
+// HandleEnrichContext returns a ToolHandlerFunc that enriches a prompt with applicable rules,
+// relevant knowledge entries, and optionally an LLM-improved version of the prompt.
+func HandleEnrichContext(store storage.Store, embedder embedding.Embedder, llmClient llm.Client) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		prompt := req.GetString("prompt", "")
+		if prompt == "" {
+			return mcplib.NewToolResultError("prompt is required"), nil
+		}
+		team := req.GetString("team", "")
+		category := req.GetString("category", "")
+		user := req.GetString("user", "")
+
+		// --- Step 1: Fetch applicable rules ---
+		applicableRules := []enrichContextRule{}
+		var rawRules []storage.Rule
+
+		if ruleStore, ok := store.(storage.RuleStore); ok {
+			rules, err := ruleStore.GetApplicableRules(ctx, team, category, user)
+			if err == nil { // degrade gracefully — return partial result on store/embed errors
+				rawRules = rules
+				for _, r := range rules {
+					applicableRules = append(applicableRules, enrichContextRule{
+						ID:      r.ID,
+						Title:   r.Title,
+						Content: r.Content,
+						Scope:   string(r.Scope),
+					})
+				}
+			}
+		}
+
+		// --- Step 2: Semantic knowledge search ---
+		relevantKnowledge := []enrichContextKnowledge{}
+
+		if embedder != nil {
+			vec, err := embedder.Embed(ctx, prompt)
+			if err == nil { // degrade gracefully — return partial result on store/embed errors
+				results, err := store.SearchSimilar(ctx, vec, 5)
+				if err == nil { // degrade gracefully — return partial result on store/embed errors
+					for _, r := range results {
+						relevantKnowledge = append(relevantKnowledge, enrichContextKnowledge{
+							ID:      r.Entry.ID,
+							Title:   r.Entry.Title,
+							Score:   r.Score,
+							Domain:  r.Entry.Domain,
+							Content: r.Entry.Content,
+						})
+					}
+				}
+			}
+		}
+
+		// --- Step 3: Build improved prompt ---
+		improvedPrompt := prompt
+
+		// Apply rules as a numbered preamble (same pattern as buildEnhancedPrompt).
+		if len(rawRules) > 0 {
+			improvedPrompt = buildEnhancedPrompt(prompt, rawRules)
+		}
+
+		// If an LLM client is available and there is relevant knowledge, use it to further improve.
+		if llmClient != nil && len(relevantKnowledge) > 0 {
+			knowledgeBlock := ""
+			for i, k := range relevantKnowledge {
+				knowledgeBlock += fmt.Sprintf("Knowledge %d (score=%.3f, domain=%s):\nTitle: %s\n%s\n\n",
+					i+1, k.Score, k.Domain, k.Title, k.Content)
+			}
+			llmPrompt := fmt.Sprintf(
+				"You are a prompt engineering expert. Given a user prompt and relevant team knowledge entries, produce an improved version of the prompt that incorporates useful context from the knowledge entries. Return only the improved prompt text — no JSON wrapper, no explanation.\n\nOriginal prompt:\n%s\n\nRelevant team knowledge:\n%s\nReturn only the improved prompt.",
+				improvedPrompt, knowledgeBlock,
+			)
+			if improved, err := llmClient.Complete(ctx, llmPrompt); err == nil && improved != "" {
+				improvedPrompt = improved
+			}
+			// On LLM error, fall back to the rule-enhanced version — already set above.
+		}
+
+		// --- Step 4: Missing inputs checklist ---
+		missingInputs := detectMissingInputs(prompt, team, category)
+
+		// --- Build and return JSON response ---
+		// (detectMissingInputs is defined below)
+		resp := enrichContextResponse{
+			ImprovedPrompt:    improvedPrompt,
+			ApplicableRules:   applicableRules,
+			RelevantKnowledge: relevantKnowledge,
+			MissingInputs:     missingInputs,
+		}
+
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("marshal response: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(string(data)), nil
+	}
+}
+
+// detectMissingInputs scans the prompt for common patterns where required context is absent.
+// It checks both structural context (team/category) and content-specific gaps (e.g. a star
+// rating mentioned without a complaint description).
+func detectMissingInputs(prompt, team, category string) []string {
+	var gaps []string
+	lower := strings.ToLower(prompt)
+
+	// Structural: no scoping context provided.
+	if team == "" && category == "" {
+		gaps = append(gaps, "Consider providing: domain/category context for scoped rule and knowledge lookup")
+	}
+
+	// Rating without complaint — e.g. "4 stars but no feedback given".
+	// Triggered by: star symbols, "N star(s)", "N/5", "rating of N", standalone digits 1-5 near "star/rate/rating".
+	hasRating := strings.ContainsAny(lower, "★☆") ||
+		containsAny(lower, "1 star", "2 star", "3 star", "4 star", "5 star",
+			"one star", "two star", "three star", "four star", "five star",
+			"1/5", "2/5", "3/5", "4/5", "5/5", "rated ", "rating of", "gave a ", "gave it")
+	hasComplaint := containsAny(lower,
+		"complaint", "complain", "issue", "problem", "concern", "feedback",
+		"dissatisfied", "unhappy", "unhappy", "frustrated", "broken", "wrong",
+		"not working", "doesn't work", "failed", "error", "bug", "defect",
+		"reason", "because", "but ", "however", "although", "even though")
+	if hasRating && !hasComplaint {
+		gaps = append(gaps, "Rating detected but no complaint or reason provided — ask the user what drove the score before proceeding")
+	}
+
+	// Vague request: very short prompt and no rules/knowledge were retrieved to compensate.
+	if len(prompt) < 30 {
+		gaps = append(gaps, "Prompt is very short — ask the user for more context before proceeding")
+	}
+
+	return gaps
+}
+
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}

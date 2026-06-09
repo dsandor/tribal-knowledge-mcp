@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 type OllamaEmbedder struct {
@@ -20,6 +21,26 @@ func NewOllamaEmbedder(url, model string) *OllamaEmbedder {
 		model:  model,
 		client: &http.Client{},
 	}
+}
+
+// Ping checks whether the Ollama endpoint is reachable by calling GET /api/tags.
+// Returns nil if the HTTP response status is 2xx within 3 seconds.
+func (e *OllamaEmbedder) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.url+"/api/tags", nil)
+	if err != nil {
+		return fmt.Errorf("ollama ping: create request: %w", err)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("ollama ping: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {

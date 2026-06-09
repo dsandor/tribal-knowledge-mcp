@@ -73,7 +73,33 @@ func (m *mockStore) SearchSimilar(_ context.Context, _ []float32, topK int) ([]s
 	return results, nil
 }
 
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                                  { return nil }
+func (m *mockStore) RateEntry(_ context.Context, _ string, _ float64) error        { return nil }
+func (m *mockStore) ApproveEntry(_ context.Context, _ string) error                { return nil }
+func (m *mockStore) RejectEntry(_ context.Context, _ string) error                 { return nil }
+func (m *mockStore) UpdateEntry(_ context.Context, _ storage.KnowledgeEntry) error { return nil }
+func (m *mockStore) Ping(_ context.Context) error                                  { return nil }
+func (m *mockStore) RecordUsage(_ context.Context, _ storage.UsageEvent) error     { return nil }
+func (m *mockStore) RecordOutcome(_ context.Context, _ storage.OutcomeRating) error { return nil }
+func (m *mockStore) GetTrendingEntries(_ context.Context, _ string, _, _ int) ([]storage.TrendingEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) GetWeakSignalEntries(_ context.Context, _ string, _ int, _ float64) ([]storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) RecordActivity(_ context.Context, _ storage.ActivityEvent) error { return nil }
+func (m *mockStore) ListActivity(_ context.Context, _ string, _, _ int) ([]storage.ActivityEvent, error) {
+	return nil, nil
+}
+func (m *mockStore) SearchHybrid(_ context.Context, _ string, _ string, _ []float32, _ string, _ int) ([]storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) BulkImport(_ context.Context, _ []storage.KnowledgeEntry) (int, int, []string, error) {
+	return 0, 0, nil, nil
+}
+func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
 
 // --- mock Embedder ---
 

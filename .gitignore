@@ -1,0 +1,36 @@
+# Binaries
+/memory
+bootstrap
+
+# Go build cache
+dist/
+
+# Database files (runtime data produced by the app)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Docker volumes
+data/
+
+# Node / frontend
+node_modules/
+web/node_modules/
+web/dist/
+
+# Test artifacts
+*.test
+coverage.out
