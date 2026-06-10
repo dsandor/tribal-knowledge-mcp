@@ -295,9 +295,18 @@ Then proxy `/mcp` separately or expose port 9090 through your firewall.
 
 ### Environment Variable Reference
 
+> **`.env` loading:** On startup the server loads a `.env` file from the current working
+> directory (override the location with `DOTENV_PATH`). **Real environment variables take
+> precedence** — anything already exported in the environment is *not* overridden by `.env`.
+> If the file is absent it is silently skipped; the startup log shows
+> `loaded environment from .env file` when one is applied. Note that `.env` is read relative
+> to the process's working directory, so prefer **absolute paths** for values like
+> `DATABASE_PATH` to avoid ambiguity.
+
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_PATH` | `knowledge.db` | SQLite file path. Ignored when `DATABASE_URL` is set. |
+| `DATABASE_PATH` | `knowledge.db` | SQLite file path (relative to the process working directory). Ignored when `DATABASE_URL` is set. |
+| `DOTENV_PATH` | `.env` | Path to the env file loaded at startup. |
 | `DATABASE_URL` | — | PostgreSQL connection string. If set, Postgres is used instead of SQLite. |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server for embeddings. Leave empty to disable. |
 | `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model name. |
@@ -313,8 +322,8 @@ Then proxy `/mcp` separately or expose port 9090 through your firewall.
 | `CLUSTER_THRESHOLD` | `0.85` | Cosine similarity threshold for clustering (0–1]. |
 | `SUPERADMIN_KEY` | — | Raw API key bootstrapped as superadmin on first run. |
 | `DEV_BYPASS_AUTH` | `false` | Skip auth; inject superadmin context. **Never set true in production.** |
-| `MCP_HTTP_ADDR` | — | Enables HTTP/SSE MCP transport. Example: `:9090`. Leave empty for stdio-only. |
-| `MCP_HTTP_PATH` | `/mcp` | URL path for the SSE MCP endpoint. |
+| `MCP_HTTP_ADDR` | — | Enables the Streamable HTTP MCP transport on this address. Example: `:8081`. Leave empty for stdio-only. |
+| `MCP_HTTP_PATH` | `/mcp` | URL path for the MCP endpoint. |
 | `RATE_LIMIT_RPS` | `60` | Per-IP requests per second (token bucket). Set `0` to disable. |
 | `TRUST_XFF` | `false` | Use `X-Forwarded-For` for client IP. Enable only behind a trusted proxy. |
 | `DB_DIR` | `./db` | Host path for PostgreSQL data volume (Docker Compose and run.sh). |
@@ -378,17 +387,33 @@ Config file location:
 }
 ```
 
-### Remote Clients (HTTP/SSE)
+### Remote Clients (Streamable HTTP)
 
-Start the server with `MCP_HTTP_ADDR` set:
+The remote transport is **Streamable HTTP** (MCP spec 2025-03-26), and the endpoint is
+**authenticated** — every request must carry `Authorization: Bearer <api_key>`.
+
+Start the server with `MCP_HTTP_ADDR` set, and confirm the startup log shows
+`MCP HTTP server listening`:
 ```bash
-MCP_HTTP_ADDR=:9090 ./tribal-knowledge
-# or in .env: MCP_HTTP_ADDR=:9090
+MCP_HTTP_ADDR=:8081 ./tribal-knowledge
+# or set MCP_HTTP_ADDR=:8081 in .env (loaded automatically; real env vars win)
 ```
 
-Connect any SSE-capable MCP client to:
+> If you don't see the `MCP HTTP server listening` log line, `MCP_HTTP_ADDR` is not set in
+> the server's environment — the transport stays disabled and clients get
+> `connection refused`. With Docker Compose, `MCP_HTTP_ADDR`/`MCP_HTTP_PATH` are passed
+> through and port `8081` is published by default.
+
+Add it to Claude Code (use the `http` transport, not `sse`):
+```bash
+claude mcp add --transport http tribal-knowledge \
+  http://127.0.0.1:8081/mcp \
+  --header "Authorization: Bearer <your-api-key>"
 ```
-http://your-server:9090/mcp
+
+Or connect any Streamable-HTTP MCP client to:
+```
+http://your-server:8081/mcp        # header: Authorization: Bearer <api_key>
 ```
 
 ---

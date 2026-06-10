@@ -18,6 +18,7 @@ import (
 	"github.com/dsandor/memory/internal/pipeline"
 	"github.com/dsandor/memory/internal/storage"
 	"github.com/dsandor/memory/internal/web"
+	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/server"
 )
 
@@ -29,6 +30,22 @@ type combinedStore interface {
 }
 
 func main() {
+	// Load a .env file (if present) before reading configuration, so the documented
+	// .env workflow actually populates the process environment. Real environment
+	// variables always win: godotenv.Load does not override variables already set.
+	// Override the file location with DOTENV_PATH if needed.
+	envFile := os.Getenv("DOTENV_PATH")
+	if envFile == "" {
+		envFile = ".env"
+	}
+	var dotenvLoaded bool
+	var dotenvErr error
+	if _, statErr := os.Stat(envFile); statErr == nil {
+		if dotenvErr = godotenv.Load(envFile); dotenvErr == nil {
+			dotenvLoaded = true
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "err", err)
@@ -48,6 +65,14 @@ func main() {
 		logLevel = slog.LevelInfo
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+
+	// Report .env loading now that the logger is configured.
+	switch {
+	case dotenvErr != nil:
+		slog.Warn("failed to load .env file", "path", envFile, "err", dotenvErr)
+	case dotenvLoaded:
+		slog.Info("loaded environment from .env file", "path", envFile)
+	}
 
 	var store combinedStore
 	if cfg.DatabaseURL != "" {
