@@ -241,6 +241,21 @@ func (s *PostgresStore) UpsertUser(ctx context.Context, u User) (string, error) 
 	return id, nil
 }
 
+func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (*User, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, team_id, email, name, external_id, password_hash, role, manually_assigned, created_at
+		FROM users WHERE id = $1
+	`, id)
+	u, err := scanUserPG(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("user %q: %w", id, ErrNotFound)
+		}
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	return u, nil
+}
+
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, team_id, email, name, external_id, password_hash, role, manually_assigned, created_at

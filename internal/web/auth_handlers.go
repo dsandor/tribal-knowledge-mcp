@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 )
 
@@ -59,6 +60,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		Expires:  sess.ExpiresAt,
 	})
+
+	// Publish a signin event. TeamID and display come from the resolved user.
+	s.publishLive(live.LiveEvent{
+		Type:   live.TypeSignin,
+		TeamID: user.TeamID,
+		Actor:  live.ActorRef{ID: user.ID, Display: live.CapFragment(user.Email)},
+	})
+
 	writeJSON(w, map[string]string{"ok": "true", "email": info.Email})
 }
 

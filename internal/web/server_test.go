@@ -133,6 +133,9 @@ func (m *mockStore) DeleteTeam(_ context.Context, id string) error { return nil 
 func (m *mockStore) UpsertUser(_ context.Context, u storage.User) (string, error) {
 	return "", nil
 }
+func (m *mockStore) GetUserByID(_ context.Context, id string) (*storage.User, error) {
+	return nil, storage.ErrNotFound
+}
 func (m *mockStore) GetUserByEmail(_ context.Context, email string) (*storage.User, error) {
 	return nil, nil
 }

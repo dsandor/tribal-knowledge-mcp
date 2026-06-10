@@ -10,17 +10,7 @@ import (
 )
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	tc := auth.GetTeamContext(r.Context())
-	settings, err := s.store.GetTeamSettings(r.Context(), tc.TeamID)
-	if err != nil {
-		writeError(w, 500, "internal_error", fmt.Sprintf("get settings: %v", err))
-		return
-	}
-	// Mask the API key — the frontend only needs to know whether one is stored.
-	if settings.AnthropicAPIKey != "" {
-		settings.AnthropicAPIKey = "stored"
-	}
-	writeJSON(w, settings)
+	s.handleGetSettingsEnriched(w, r)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {

@@ -8,13 +8,32 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	agentpkg "github.com/dsandor/memory/internal/agent"
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 )
+
+// publishLive publishes a live event to the hub if one is configured.
+// It is a no-op when the hub is nil. The event's ID is set to a new UUID if
+// empty, and CreatedAt is set to now (UTC) if zero.
+func (s *Server) publishLive(ev live.LiveEvent) {
+	if s.hub == nil {
+		return
+	}
+	if ev.ID == "" {
+		ev.ID = uuid.NewString()
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now().UTC()
+	}
+	s.hub.Publish(ev)
+}
 
 // StatsResponse is the JSON shape returned by GET /api/stats.
 type StatsResponse struct {
@@ -284,7 +303,7 @@ func (s *Server) handleAgentExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
-	if s.agentLLM == nil {
+	if s.aiSrc == nil {
 		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
 		return
 	}
@@ -310,10 +329,18 @@ func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve agent LLM per request so saved team settings take effect immediately.
+	tc := auth.GetTeamContext(ctx)
+	agentLLM := s.aiSrc.AgentLLM(ctx, tc.TeamID)
+	if agentLLM == nil {
+		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
+		return
+	}
+
 	// Load relevant knowledge entries for context (same domain, up to 20).
 	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20})
 
-	revised, err := agentpkg.Refactor(ctx, s.agentLLM, current, entries, body.Feedback)
+	revised, err := agentpkg.Refactor(ctx, agentLLM, current, entries, body.Feedback)
 	if err != nil {
 		writeError(w, 500, "llm_error", fmt.Sprintf("refactor failed: %v", err))
 		return
@@ -431,6 +458,20 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("store entry: %v", err))
 		return
 	}
+
+	// Publish a live event so connected SSE clients see the new entry in real time.
+	actorID := tc.UserID
+	if actorID == "" {
+		actorID = tc.KeyID
+	}
+	s.publishLive(live.LiveEvent{
+		Type:    live.TypeKnowledgeStored,
+		TeamID:  tc.TeamID,
+		EntryID: id,
+		Title:   live.CapFragment(body.Title),
+		Actor:   live.ActorRef{ID: actorID, Display: tc.Display},
+	})
+
 	writeJSON(w, map[string]string{"id": id})
 }
 

@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -18,7 +19,12 @@ AFTER completing a non-trivial task, call knowledge_store to capture reusable le
 
 When in doubt, consult the server — calls are cheap and idempotent.`
 
-func NewMCPServer(store storage.Store, embedder embedding.Embedder) *server.MCPServer {
+func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventBus) *server.MCPServer {
+	var eventBus live.EventBus
+	if len(bus) > 0 {
+		eventBus = bus[0]
+	}
+
 	s := server.NewMCPServer(
 		"tribal-knowledge",
 		"0.1.0",
@@ -41,7 +47,7 @@ func NewMCPServer(store storage.Store, embedder embedding.Embedder) *server.MCPS
 			mcplib.WithArray("tags", mcplib.Description("Additional tags")),
 			mcplib.WithBoolean("dry_run", mcplib.Description("If true, validate and preview the entry without storing it. Returns the entry that would be stored including its content_hash.")),
 		),
-		HandleKnowledgeStore(store, embedder),
+		HandleKnowledgeStore(store, src, eventBus),
 	)
 
 	s.AddTool(

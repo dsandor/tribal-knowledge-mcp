@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/config"
 	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/llm"
 	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/pipeline"
@@ -99,9 +102,29 @@ func main() {
 		bootstrapSuperadmin(store, cfg.SuperadminKey)
 	}
 
-	embedder := embedding.NewOllamaEmbedder(cfg.OllamaURL, cfg.OllamaModel)
+	// Build the AI sources layer. Clients are resolved per call so saved team
+	// settings (AI config) take effect immediately without a restart.
+	envDefaults := aiconfig.EnvDefaults{
+		AnthropicAPIKey: cfg.AnthropicAPIKey,
+		AnthropicModel:  cfg.AnthropicModel,
+		AgentModel:      cfg.AgentModel,
+		OllamaURL:       cfg.OllamaURL,
+		OllamaModel:     cfg.OllamaModel,
+	}
+	resolver := aiconfig.NewResolver(store, envDefaults)
+	src := &aiconfig.Sources{
+		Resolver:    resolver,
+		LLM:         llm.NewProvider(),
+		Embed:       embedding.NewProvider(),
+		DefaultTeam: cfg.TeamID,
+	}
 
 	triggerCh := make(chan struct{}, 1)
+
+	// Construct the live event bus and presence tracker once, shared by the
+	// web server (SSE stream + producers) and, later, MCP-side producers.
+	liveHub := live.NewHub()
+	presence := live.NewPresence(60 * time.Second)
 
 	staticFS, err := fs.Sub(web.DistFS, "dist")
 	if err != nil {
@@ -113,10 +136,9 @@ func main() {
 		WithPipelineTrigger(triggerCh).
 		WithDevBypass(cfg.DevBypassAuth).
 		WithRateLimitRPS(cfg.RateLimitRPS).
-		WithTrustXFF(cfg.TrustXFF)
-	if cfg.AnthropicAPIKey != "" {
-		webServer = webServer.WithAgentLLM(llm.NewAnthropicClient(cfg.AnthropicAPIKey, cfg.AgentModel))
-	}
+		WithTrustXFF(cfg.TrustXFF).
+		WithLive(liveHub, presence).
+		WithAISources(src)
 
 	httpServer := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -133,46 +155,69 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	mcpServer := internalmcp.NewMCPServer(store, embedder)
+	// Presence sweep: every 10s evict stale entries and publish presence deltas
+	// to the live hub so SSE clients learn who joined or left.
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deltas := presence.Sweep()
+				for team, delta := range deltas {
+					if len(delta.Joined) == 0 && len(delta.Left) == 0 {
+						continue
+					}
+					online := presence.OnlineCount(team, false)
+					liveHub.Publish(live.LiveEvent{
+						Type:   live.TypePresence,
+						TeamID: team,
+						Meta: map[string]string{
+							"online_count": strconv.Itoa(online),
+							"joined":       strconv.Itoa(len(delta.Joined)),
+							"left":         strconv.Itoa(len(delta.Left)),
+						},
+						CreatedAt: time.Now().UTC(),
+					})
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	mcpServer := internalmcp.NewMCPServer(store, src, liveHub)
 	internalmcp.RegisterAnalysisTools(mcpServer, store)
 	internalmcp.RegisterRuleTools(mcpServer, store)
 	internalmcp.RegisterAgentTools(mcpServer, store)
-	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, embedder)
-	internalmcp.RegisterUsageTools(mcpServer, store)
+	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, src, liveHub)
+	internalmcp.RegisterUsageTools(mcpServer, store, liveHub)
 	internalmcp.RegisterResources(mcpServer, store)
+	internalmcp.RegisterPromptSuggest(mcpServer, store, src)
+	internalmcp.RegisterEnrichContext(mcpServer, store, src, liveHub)
 
-	var llmClient llm.Client
-	if cfg.AnthropicAPIKey != "" {
-		llmClient = llm.NewAnthropicClient(cfg.AnthropicAPIKey, cfg.AnthropicModel)
-		agentLLMClient := llm.NewAnthropicClient(cfg.AnthropicAPIKey, cfg.AgentModel)
-		internalmcp.RegisterPromptSuggest(mcpServer, store, embedder, llmClient)
+	// Pipeline always starts; it skips gracefully (logs) when no effective API key.
+	p := pipeline.New(store, src, pipeline.Config{
+		MinEntries:       cfg.PipelineMinEntries,
+		Interval:         cfg.PipelineInterval,
+		ClusterThreshold: cfg.ClusterThreshold,
+	}).
+		WithAgentGeneration(store).
+		WithWeakSignalImprovement(cfg.TeamID).
+		WithLivePublish(liveHub)
 
-		improvementLLMClient := llm.NewAnthropicClient(cfg.AnthropicAPIKey, "claude-haiku-4-5-20251001")
+	p.Start(ctx)
 
-		p := pipeline.New(store, llmClient, pipeline.Config{
-			MinEntries:       cfg.PipelineMinEntries,
-			Interval:         cfg.PipelineInterval,
-			ClusterThreshold: cfg.ClusterThreshold,
-		}).
-			WithAgentGeneration(store, agentLLMClient).
-			WithWeakSignalImprovement(improvementLLMClient, cfg.TeamID)
-
-		p.Start(ctx)
-
-		go func() {
-			for {
-				select {
-				case <-triggerCh:
-					p.TriggerNow()
-				case <-ctx.Done():
-					return
-				}
+	go func() {
+		for {
+			select {
+			case <-triggerCh:
+				p.TriggerNow()
+			case <-ctx.Done():
+				return
 			}
-		}()
-	} else {
-		internalmcp.RegisterPromptSuggest(mcpServer, store, embedder, nil)
-	}
-	internalmcp.RegisterEnrichContext(mcpServer, store, embedder, llmClient)
+		}
+	}()
 
 	if cfg.MCPHTTPAddr != "" {
 		internalmcp.StartRemoteMCP(mcpServer, cfg.MCPHTTPAddr, cfg.MCPHTTPPath, store)

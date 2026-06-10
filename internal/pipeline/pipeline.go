@@ -9,9 +9,19 @@ import (
 	"time"
 
 	"github.com/dsandor/memory/internal/agent"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
+	"github.com/google/uuid"
 )
+
+// AISource resolves ready-to-use LLM clients per pipeline run. *aiconfig.Sources
+// satisfies this interface; tests may supply a lightweight fake.
+type AISource interface {
+	AnalysisLLM(ctx context.Context, teamID string) llm.Client
+	AgentLLM(ctx context.Context, teamID string) llm.Client
+	ImprovementLLM(ctx context.Context, teamID string) llm.Client
+}
 
 // Config controls when and how the pipeline runs.
 type Config struct {
@@ -22,21 +32,22 @@ type Config struct {
 
 // Pipeline orchestrates the knowledge analysis pipeline.
 type Pipeline struct {
-	store           storage.AnalysisStore
-	agentStore      storage.AgentStore
-	llm             llm.Client
-	agentLLM        llm.Client
-	improvementLLM  llm.Client
-	teamID          string
-	cfg             Config
-	trigger         chan struct{}
-	mu              sync.Mutex
-	stageDone       chan struct{}
+	store      storage.AnalysisStore
+	agentStore storage.AgentStore
+	src        AISource
+	teamID     string
+	cfg        Config
+	trigger    chan struct{}
+	mu         sync.Mutex
+	stageDone  chan struct{}
+	liveBus    live.EventBus // optional; nil disables live publishing
 }
 
-// New creates a new Pipeline. Call WithAgentGeneration to enable agent synthesis.
-func New(store storage.AnalysisStore, llmClient llm.Client, cfg Config) *Pipeline {
-	return &Pipeline{store: store, llm: llmClient, cfg: cfg, trigger: make(chan struct{}, 1)}
+// New creates a new Pipeline. src resolves LLM clients per run so that saved
+// team settings take effect immediately. Call WithAgentGeneration to enable
+// agent synthesis.
+func New(store storage.AnalysisStore, src AISource, cfg Config) *Pipeline {
+	return &Pipeline{store: store, src: src, cfg: cfg, trigger: make(chan struct{}, 1)}
 }
 
 // TriggerNow requests an immediate pipeline run. Non-blocking; drops the signal
@@ -49,18 +60,42 @@ func (p *Pipeline) TriggerNow() {
 }
 
 // WithAgentGeneration configures the pipeline to generate agents from clusters.
-func (p *Pipeline) WithAgentGeneration(agentStore storage.AgentStore, agentLLM llm.Client) *Pipeline {
+func (p *Pipeline) WithAgentGeneration(agentStore storage.AgentStore) *Pipeline {
 	p.agentStore = agentStore
-	p.agentLLM = agentLLM
 	return p
 }
 
 // WithWeakSignalImprovement configures the pipeline to draft LLM-rewritten improvements
 // for entries that have received poor outcome ratings. teamID scopes the query.
-func (p *Pipeline) WithWeakSignalImprovement(improvementLLM llm.Client, teamID string) *Pipeline {
-	p.improvementLLM = improvementLLM
+func (p *Pipeline) WithWeakSignalImprovement(teamID string) *Pipeline {
 	p.teamID = teamID
 	return p
+}
+
+// WithLivePublish attaches an optional live.EventBus to the pipeline so it can
+// publish real-time activity events to the dashboard SSE stream. Passing nil is
+// safe and disables publishing (identical to not calling this method).
+func (p *Pipeline) WithLivePublish(bus live.EventBus) *Pipeline {
+	p.liveBus = bus
+	return p
+}
+
+// pipelineActor is the ActorRef used for all pipeline-originated events.
+var pipelineActor = live.ActorRef{ID: "pipeline", Display: "pipeline"}
+
+// publishPipelineEvent publishes ev to p.liveBus, filling ID/CreatedAt if zero.
+// No-ops when p.liveBus is nil.
+func (p *Pipeline) publishPipelineEvent(ev live.LiveEvent) {
+	if p.liveBus == nil {
+		return
+	}
+	if ev.ID == "" {
+		ev.ID = uuid.New().String()
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now().UTC()
+	}
+	p.liveBus.Publish(ev)
 }
 
 // Start launches the pipeline as a background goroutine until ctx is cancelled.
@@ -102,6 +137,16 @@ func (p *Pipeline) Start(ctx context.Context) {
 
 // Run executes a single pipeline pass: cluster → score → summarize → detect gaps → snapshot → generate agents.
 func (p *Pipeline) Run(ctx context.Context, trigger string) error {
+	// Resolve LLM clients at the start of each run so that saved settings take
+	// effect immediately without a server restart.
+	analysisLLM := p.src.AnalysisLLM(ctx, p.teamID)
+	if analysisLLM == nil {
+		slog.Info("pipeline skipped: no effective anthropic key", "team", p.teamID, "trigger", trigger)
+		return nil
+	}
+	agentLLM := p.src.AgentLLM(ctx, p.teamID)
+	improvementLLM := p.src.ImprovementLLM(ctx, p.teamID)
+
 	// Signal to Start that a stage is in progress so graceful shutdown can wait.
 	sd := make(chan struct{})
 	p.mu.Lock()
@@ -161,7 +206,7 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 			}
 		}
 
-		summary, err := SummarizeCluster(ctx, p.llm, clusterEntries)
+		summary, err := SummarizeCluster(ctx, analysisLLM, clusterEntries)
 		if err != nil {
 			runErrs = append(runErrs, fmt.Sprintf("summarize cluster: %v", err))
 			continue
@@ -169,7 +214,7 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 
 		var totalScore float64
 		for _, e := range clusterEntries {
-			if score, err := ScoreEntry(ctx, p.llm, e); err == nil {
+			if score, err := ScoreEntry(ctx, analysisLLM, e); err == nil {
 				totalScore += score.Total
 			}
 		}
@@ -194,8 +239,8 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 		cluster.ID = clusterID
 		clustersFound++
 
-		if p.agentStore != nil && p.agentLLM != nil {
-			if err := p.generateAgent(ctx, cluster, clusterEntries); err != nil {
+		if p.agentStore != nil && agentLLM != nil {
+			if err := p.generateAgent(ctx, agentLLM, cluster, clusterEntries); err != nil {
 				runErrs = append(runErrs, fmt.Sprintf("generate agent for %s: %v", cand.Domain, err))
 			}
 		}
@@ -207,15 +252,15 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 		}
 	}
 
-	gaps, err := DetectGaps(ctx, p.llm, domainCounts)
+	gaps, err := DetectGaps(ctx, analysisLLM, domainCounts)
 	if err != nil {
 		runErrs = append(runErrs, fmt.Sprintf("detect gaps: %v", err))
 		gaps = nil
 	}
 
 	// Weak-signal improvement stage: runs after quality scoring is complete.
-	if p.improvementLLM != nil {
-		p.runWeakSignalImprovement(ctx)
+	if improvementLLM != nil {
+		p.runWeakSignalImprovement(ctx, improvementLLM)
 	}
 
 	latest, err := p.store.GetLatestSnapshot(ctx)
@@ -248,12 +293,27 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 	if len(runErrs) > 0 {
 		status = "complete_with_errors"
 	}
-	return p.store.FinishPipelineRun(finishCtx, runID, status, len(entries), clustersFound, runErrs)
+	finishErr := p.store.FinishPipelineRun(finishCtx, runID, status, len(entries), clustersFound, runErrs)
+
+	// Publish pipeline_complete live event (best-effort, nil-safe).
+	p.publishPipelineEvent(live.LiveEvent{
+		Type:   live.TypePipelineComplete,
+		TeamID: p.teamID,
+		Actor:  pipelineActor,
+		Meta: map[string]string{
+			"run_id":          runID,
+			"status":          status,
+			"entries":         fmt.Sprintf("%d", len(entries)),
+			"clusters":        fmt.Sprintf("%d", clustersFound),
+		},
+	})
+
+	return finishErr
 }
 
 // runWeakSignalImprovement fetches poorly-rated entries, rewrites them via LLM,
 // and stores draft improved copies pending curator review.
-func (p *Pipeline) runWeakSignalImprovement(ctx context.Context) {
+func (p *Pipeline) runWeakSignalImprovement(ctx context.Context, improvementLLM llm.Client) {
 	weak, err := p.store.GetWeakSignalEntries(ctx, p.teamID, 3, 2.5)
 	if err != nil {
 		slog.Error("weak signal improvement: get entries", "err", err)
@@ -269,7 +329,7 @@ func (p *Pipeline) runWeakSignalImprovement(ctx context.Context) {
 	}
 
 	for _, entry := range weak {
-		if err := p.improveEntry(ctx, entry); err != nil {
+		if err := p.improveEntry(ctx, improvementLLM, entry); err != nil {
 			slog.Error("weak signal improvement: improve entry", "id", entry.ID, "err", err)
 			// continue to next entry on failure
 		}
@@ -277,7 +337,7 @@ func (p *Pipeline) runWeakSignalImprovement(ctx context.Context) {
 }
 
 // improveEntry rewrites a single weak-signal entry using exemplars from the same domain.
-func (p *Pipeline) improveEntry(ctx context.Context, entry storage.KnowledgeEntry) error {
+func (p *Pipeline) improveEntry(ctx context.Context, improvementLLM llm.Client, entry storage.KnowledgeEntry) error {
 	// Fetch exemplars from the same domain (up to 10 so we can pick top 2 by quality score).
 	domainEntries, err := p.store.ListEntries(ctx, storage.ListFilter{
 		Domain: entry.Domain,
@@ -339,7 +399,7 @@ Return JSON: {"title": "...", "content": "...", "tags": ["..."]}`,
 		entry.Title, entry.Content, string(tagsJSON),
 	)
 
-	rawResponse, err := p.improvementLLM.Complete(ctx, prompt)
+	rawResponse, err := improvementLLM.Complete(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("llm complete: %w", err)
 	}
@@ -375,7 +435,7 @@ Return JSON: {"title": "...", "content": "...", "tags": ["..."]}`,
 
 	// Record the activity event.
 	_ = p.store.RecordActivity(ctx, storage.ActivityEvent{
-		EventType: "improvement_drafted",
+		EventType: live.TypeImprovementDrafted,
 		EntryID:   newID,
 		Metadata: map[string]string{
 			"original_id":         entry.ID,
@@ -387,8 +447,8 @@ Return JSON: {"title": "...", "content": "...", "tags": ["..."]}`,
 	return nil
 }
 
-func (p *Pipeline) generateAgent(ctx context.Context, cluster storage.Cluster, entries []storage.KnowledgeEntry) error {
-	newAgent, err := agent.Generate(ctx, p.agentLLM, cluster, entries)
+func (p *Pipeline) generateAgent(ctx context.Context, agentLLM llm.Client, cluster storage.Cluster, entries []storage.KnowledgeEntry) error {
+	newAgent, err := agent.Generate(ctx, agentLLM, cluster, entries)
 	if err != nil {
 		return fmt.Errorf("generate: %w", err)
 	}
@@ -411,12 +471,29 @@ func (p *Pipeline) generateAgent(ctx context.Context, cluster storage.Cluster, e
 		return fmt.Errorf("upsert agent: %w", err)
 	}
 
-	return p.agentStore.StoreAgentVersion(ctx, storage.AgentVersion{
+	if err := p.agentStore.StoreAgentVersion(ctx, storage.AgentVersion{
 		AgentID:      id,
 		Version:      newAgent.Version,
 		SystemPrompt: newAgent.SystemPrompt,
 		Instructions: newAgent.Instructions,
 		AntiPatterns: newAgent.AntiPatterns,
 		Changelog:    changelog,
+	}); err != nil {
+		return err
+	}
+
+	// Publish agent_generated live event (best-effort, nil-safe).
+	p.publishPipelineEvent(live.LiveEvent{
+		Type:   live.TypeAgentGenerated,
+		TeamID: p.teamID,
+		Actor:  pipelineActor,
+		Title:  live.CapFragment(cluster.Domain),
+		Meta: map[string]string{
+			"domain":     cluster.Domain,
+			"cluster_id": cluster.ID,
+			"agent_id":   id,
+		},
 	})
+
+	return nil
 }

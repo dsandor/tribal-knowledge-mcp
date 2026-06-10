@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  api, fetchTrending, fetchActivity, fetchUsage, fetchContributions,
-  type Stats, type KnowledgeEntry, type TrendingEntry, type ActivityEvent,
+  api, fetchTrending, fetchUsage, fetchContributions,
+  type Stats, type KnowledgeEntry, type TrendingEntry,
 } from '@/lib/api'
 import {
   BookOpen, Network, Bot, Zap, Users, TrendingUp,
-  CheckCircle, XCircle, Star, GitMerge, Sparkles, Activity,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import Alert from '@mui/material/Alert'
@@ -15,7 +14,6 @@ import CardContent from '@mui/material/CardContent'
 import CardHeader from '@mui/material/CardHeader'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
-import Divider from '@mui/material/Divider'
 import GlobalStyles from '@mui/material/GlobalStyles'
 import Grid from '@mui/material/Grid'
 import Skeleton from '@mui/material/Skeleton'
@@ -23,6 +21,9 @@ import Stack from '@mui/material/Stack'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import Counter from '@/components/Counter/Counter'
+import OnlineNow from '@/components/OnlineNow'
+import LiveActivityFeed from '@/components/LiveActivityFeed'
+import { useActivityStream } from '@/hooks/useActivityStream'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -57,43 +58,7 @@ const GLOBAL_STYLES = (
   `} />
 )
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function relativeTime(iso: string): string {
-  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (sec < 60)  return 'just now'
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`
-  return `${Math.floor(sec / 86400)}d ago`
-}
-
-function eventIcon(type: string) {
-  const s = { width: 12, height: 12 }
-  switch (type) {
-    case 'stored':             return <BookOpen style={{ ...s, color: '#22c55e' }} />
-    case 'rated':              return <Star style={{ ...s, color: '#facc15' }} />
-    case 'approved':           return <CheckCircle style={{ ...s, color: '#059669' }} />
-    case 'rejected':           return <XCircle style={{ ...s, color: '#dc2626' }} />
-    case 'pipeline_complete':  return <GitMerge style={{ ...s, color: '#60a5fa' }} />
-    case 'improvement_drafted':return <Sparkles style={{ ...s, color: '#a78bfa' }} />
-    case 'agent_generated':    return <Bot style={{ ...s, color: '#34d399' }} />
-    default:                   return <Activity style={{ ...s, color: '#64748b' }} />
-  }
-}
-
-function eventLabel(type: string, meta: Record<string, string>): string {
-  const domain = meta?.domain ? ` · ${meta.domain}` : ''
-  switch (type) {
-    case 'stored':              return `New entry added${domain}`
-    case 'rated':               return `Entry rated${meta?.rating ? ` ${meta.rating}★` : ''}${domain}`
-    case 'approved':            return `Entry approved${domain}`
-    case 'rejected':            return `Entry rejected${domain}`
-    case 'pipeline_complete':   return `Pipeline complete — ${meta?.clusters_found ?? '?'} clusters`
-    case 'improvement_drafted': return `Improvement drafted${domain}`
-    case 'agent_generated':     return `Agent generated${domain}`
-    default:                    return type
-  }
-}
+// ─── LiveDot ──────────────────────────────────────────────────────────────────
 
 function LiveDot() {
   return (
@@ -138,56 +103,6 @@ function StatCard({
         )}
       </CardContent>
     </Card>
-  )
-}
-
-// ─── Live activity feed ───────────────────────────────────────────────────────
-
-// Merge new events at top, keep up to maxLen, preserve stable identity for no-flicker.
-function mergeEvents(prev: ActivityEvent[], next: ActivityEvent[], maxLen = 25): ActivityEvent[] {
-  const seenIds = new Set(prev.map(e => e.id))
-  const fresh = next.filter(e => !seenIds.has(e.id))
-  return [...fresh, ...prev].slice(0, maxLen)
-}
-
-function ActivityFeed({ events, newIds }: { events: ActivityEvent[]; newIds: Set<string> }) {
-  if (events.length === 0) {
-    return (
-      <Typography variant="caption" color="text.secondary">
-        No activity yet — knowledge events will appear here.
-      </Typography>
-    )
-  }
-  return (
-    <Stack spacing={0} divider={<Divider sx={{ opacity: 0.08 }} />}>
-      {events.map(ev => (
-        <Box
-          key={ev.id}
-          className={newIds.has(ev.id) ? 'tkm-new-event' : undefined}
-          sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.75, minWidth: 0 }}
-        >
-          <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-            {eventIcon(ev.event_type)}
-          </Box>
-          <Typography
-            variant="caption"
-            sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}
-          >
-            {eventLabel(ev.event_type, ev.metadata)}
-          </Typography>
-          {ev.actor_id && (
-            <Tooltip title={ev.actor_id} placement="top">
-              <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0, fontFamily: 'monospace', fontSize: 10 }}>
-                {ev.actor_id.length > 8 ? ev.actor_id.slice(0, 8) + '…' : ev.actor_id}
-              </Typography>
-            </Tooltip>
-          )}
-          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, whiteSpace: 'nowrap', fontSize: 10 }}>
-            {relativeTime(ev.created_at)}
-          </Typography>
-        </Box>
-      ))}
-    </Stack>
   )
 }
 
@@ -374,7 +289,7 @@ function ContributorsPanel({ data }: { data: ContributionsData | null }) {
   }
   const medals = ['🥇', '🥈', '🥉']
   return (
-    <Stack spacing={0} divider={<Divider sx={{ opacity: 0.08 }} />}>
+    <Stack spacing={0} divider={<Box sx={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }} />}>
       {list.map((c, i) => (
         <Box key={c.author} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.9 }}>
           <Typography sx={{ fontSize: 14, flexShrink: 0, width: 20, textAlign: 'center' }}>
@@ -402,21 +317,21 @@ function ContributorsPanel({ data }: { data: ContributionsData | null }) {
 export default function Dashboard() {
   const navigate = useNavigate()
 
+  // ── SSE live stream (replaces 6s activity poll) ──
+  const { events, online, onlineCount, connected } = useActivityStream()
+
   // ── State buckets ──
-  const [stats,         setStats]         = useState<Stats | null>(null)
-  const [trending,      setTrending]       = useState<TrendingEntry[] | null>(null)
-  const [events,        setEvents]         = useState<ActivityEvent[]>([])
-  const [newEventIds,   setNewEventIds]     = useState<Set<string>>(new Set())
-  const [usageData,     setUsageData]       = useState<UsageData | null>(null)
-  const [contribData,   setContribData]     = useState<ContributionsData | null>(null)
-  const [error,         setError]           = useState<string | null>(null)
-  const [loaded,        setLoaded]          = useState(false)
+  const [stats,       setStats]       = useState<Stats | null>(null)
+  const [trending,    setTrending]     = useState<TrendingEntry[] | null>(null)
+  const [usageData,   setUsageData]    = useState<UsageData | null>(null)
+  const [contribData, setContribData]  = useState<ContributionsData | null>(null)
+  const [error,       setError]        = useState<string | null>(null)
+  const [loaded,      setLoaded]       = useState(false)
 
   // Extra counters derived from analytics
   const totalUsage = usageData ? usageData.by_domain.reduce((s, d) => s + d.total_usage, 0) : 0
-  const activeUsers = contribData ? contribData.leaderboard.length : 0
 
-  // ── Fetch helpers (never set state to null after first load → no spinner flash) ──
+  // ── Fetch helpers ──
 
   const fetchStats = useCallback(async () => {
     try {
@@ -436,24 +351,6 @@ export default function Dashboard() {
     } catch { /* keep previous */ }
   }, [])
 
-  const fetchActivityData = useCallback(async () => {
-    try {
-      const fresh = await fetchActivity(30, 0)
-      setEvents(prev => {
-        const merged = mergeEvents(prev, fresh)
-        // Track which IDs are genuinely new
-        const prevIds = new Set(prev.map(e => e.id))
-        const freshNew = fresh.filter(e => !prevIds.has(e.id)).map(e => e.id)
-        if (freshNew.length > 0) {
-          setNewEventIds(new Set(freshNew))
-          // Clear the "new" highlight after animation completes
-          setTimeout(() => setNewEventIds(new Set()), 800)
-        }
-        return merged
-      })
-    } catch { /* keep previous */ }
-  }, [])
-
   const fetchAnalytics = useCallback(async () => {
     try {
       const [u, c] = await Promise.all([fetchUsage(), fetchContributions()])
@@ -463,20 +360,23 @@ export default function Dashboard() {
   }, [])
 
   // ── Initial load ──
+  // Use a ref to avoid double-invoke in StrictMode messing up the onboarding check
+  const initialLoadDoneRef = useRef(false)
   useEffect(() => {
+    if (initialLoadDoneRef.current) return
+    initialLoadDoneRef.current = true
     Promise.all([
       fetchStats(),
       fetchTrendingData(),
-      fetchActivityData(),
       fetchAnalytics(),
     ]).catch(() => setError('Failed to load dashboard')).finally(() => setLoaded(true))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Stats + activity: fast poll (6s) ──
+  // ── Stats: fast poll (6s) ──
   useEffect(() => {
-    const id = setInterval(() => { fetchStats(); fetchActivityData() }, 6_000)
+    const id = setInterval(fetchStats, 6_000)
     return () => clearInterval(id)
-  }, [fetchStats, fetchActivityData])
+  }, [fetchStats])
 
   // ── Trending: medium poll (15s) ──
   useEffect(() => {
@@ -529,7 +429,12 @@ export default function Dashboard() {
             />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
-            <StatCard title="Contributors" value={activeUsers} icon={Users} color="#f472b6" />
+            <StatCard
+              title="Online Now"
+              value={Math.max(online.length, onlineCount)}
+              icon={Users}
+              color="#f472b6"
+            />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
             <StatCard title="Trending" value={trending?.length ?? 0} icon={TrendingUp} color="#fb923c"
@@ -545,23 +450,24 @@ export default function Dashboard() {
             <Card sx={{ height: '100%', minHeight: 320 }}>
               <CardHeader
                 title={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="subtitle2">Team Activity</Typography>
-                    <LiveDot />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography variant="subtitle2">Team Activity</Typography>
+                      <LiveDot />
+                    </Box>
+                    {/* Online-now widget inline in header */}
+                    <OnlineNow online={online} count={onlineCount > 0 ? onlineCount : undefined} />
                   </Box>
                 }
                 subheader={
                   <Typography variant="caption" color="text.secondary">
-                    Updates every 6s — events from all users
+                    {connected ? 'Live stream — events from all users' : 'Reconnecting to live stream…'}
                   </Typography>
                 }
                 sx={{ pb: 1 }}
               />
               <CardContent sx={{ pt: 0, maxHeight: 360, overflowY: 'auto' }}>
-                {events.length === 0 && !loaded
-                  ? <Stack spacing={1}>{[0,1,2,3].map(i => <Skeleton key={i} variant="text" />)}</Stack>
-                  : <ActivityFeed events={events} newIds={newEventIds} />
-                }
+                <LiveActivityFeed events={events} connected={connected} />
               </CardContent>
             </Card>
           </Grid>

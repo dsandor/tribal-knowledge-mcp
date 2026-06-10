@@ -5,21 +5,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dsandor/memory/internal/embedding"
-	"github.com/dsandor/memory/internal/llm"
+	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func RegisterPromptSuggest(s *server.MCPServer, store storage.Store, embedder embedding.Embedder, llmClient llm.Client) {
+func RegisterPromptSuggest(s *server.MCPServer, store storage.Store, src *aiconfig.Sources) {
 	s.AddTool(
 		mcplib.NewTool("prompt_suggest",
 			mcplib.WithDescription("Call to get an LLM-improved version of a draft prompt, using high-rated team knowledge as examples. Use when you want a rewritten prompt, not just context. Prefer enrich_context when you need both rules and knowledge in one call."),
 			mcplib.WithString("prompt", mcplib.Required(), mcplib.Description("Draft prompt to improve")),
 			mcplib.WithString("domain", mcplib.Description("Optional domain to focus suggestions")),
 		),
-		HandlePromptSuggest(store, embedder, llmClient),
+		HandlePromptSuggest(store, src),
 	)
 
 	s.AddPrompt(
@@ -29,17 +28,25 @@ func RegisterPromptSuggest(s *server.MCPServer, store storage.Store, embedder em
 			mcplib.WithArgument("domain", mcplib.ArgumentDescription("Domain for rule and agent lookup (optional)")),
 			mcplib.WithArgument("team", mcplib.ArgumentDescription("Team identifier (optional)")),
 		),
-		HandleEnhanceWithContext(store, embedder),
+		HandleEnhanceWithContext(store, src),
 	)
 }
 
-func HandlePromptSuggest(store storage.Store, embedder embedding.Embedder, llmClient llm.Client) server.ToolHandlerFunc {
+func HandlePromptSuggest(store storage.Store, src *aiconfig.Sources) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		prompt := req.GetString("prompt", "")
 		if prompt == "" {
 			return mcplib.NewToolResultError("prompt is required"), nil
 		}
 		domain := req.GetString("domain", "")
+
+		// Resolve effective team and AI clients per call.
+		teamID, _ := resolveActorTeam(ctx)
+		if teamID == "" {
+			teamID = src.DefaultTeam
+		}
+		embedder := src.Embedder(ctx, teamID)
+		llmClient := src.AnalysisLLM(ctx, teamID)
 
 		if embedder == nil || llmClient == nil {
 			return mcplib.NewToolResultText(prompt), nil
@@ -98,11 +105,21 @@ func HandlePromptSuggest(store storage.Store, embedder embedding.Embedder, llmCl
 	}
 }
 
-func HandleEnhanceWithContext(store storage.Store, embedder embedding.Embedder) func(context.Context, mcplib.GetPromptRequest) (*mcplib.GetPromptResult, error) {
+func HandleEnhanceWithContext(store storage.Store, src *aiconfig.Sources) func(context.Context, mcplib.GetPromptRequest) (*mcplib.GetPromptResult, error) {
 	return func(ctx context.Context, req mcplib.GetPromptRequest) (*mcplib.GetPromptResult, error) {
 		prompt := req.Params.Arguments["prompt"]
 		domain := req.Params.Arguments["domain"]
 		team := req.Params.Arguments["team"]
+
+		// Resolve effective team and embedder per call.
+		teamID, _ := resolveActorTeam(ctx)
+		if teamID == "" && team != "" {
+			teamID = team
+		}
+		if teamID == "" {
+			teamID = src.DefaultTeam
+		}
+		embedder := src.Embedder(ctx, teamID)
 
 		preamble := strings.Builder{}
 

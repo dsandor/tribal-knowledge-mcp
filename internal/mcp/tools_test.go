@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dsandor/memory/internal/aiconfig"
 	internalmcp "github.com/dsandor/memory/internal/mcp"
+	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/live"
+	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -112,6 +116,63 @@ func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 	return m.embedding, m.err
 }
 
+// --- fake AI providers for constructing *aiconfig.Sources in tests ---
+
+// fakeEmbedProvider always returns the same Embedder regardless of url/model.
+type fakeEmbedProvider struct{ e embedding.Embedder }
+
+func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder { return f.e }
+
+// fakeLLMProvider always returns the same Client regardless of apiKey/model.
+type fakeLLMProvider struct{ c llm.Client }
+
+func (f *fakeLLMProvider) Client(_, _ string) llm.Client { return f.c }
+
+// fakeSettingsStore returns empty settings (no saved overrides).
+type fakeSettingsStore struct{}
+
+func (f *fakeSettingsStore) GetTeamSettings(_ context.Context, _ string) (*storage.TeamSettings, error) {
+	return &storage.TeamSettings{}, nil
+}
+
+// newTestSources builds a *aiconfig.Sources backed by the given embedder and
+// optional LLM client. The resolver uses an empty settings store (env defaults
+// only), which keeps nil-client behaviour for keys/URLs not provided.
+func newTestSources(e embedding.Embedder, c llm.Client) *aiconfig.Sources {
+	resolver := aiconfig.NewResolver(&fakeSettingsStore{}, aiconfig.EnvDefaults{
+		// Provide non-empty key+model so the LLM provider is called when c != nil.
+		AnthropicAPIKey: "test-key",
+		AnthropicModel:  "test-model",
+		OllamaURL:       "http://test-ollama",
+		OllamaModel:     "test-model",
+	})
+	return &aiconfig.Sources{
+		Resolver:    resolver,
+		LLM:         &fakeLLMProvider{c: c},
+		Embed:       &fakeEmbedProvider{e: e},
+		DefaultTeam: "test",
+	}
+}
+
+// newNilEmbedSources builds a *aiconfig.Sources where OllamaURL is intentionally
+// empty so that Sources.Embedder always returns nil, simulating an unconfigured
+// embedding environment.
+func newNilEmbedSources(c llm.Client) *aiconfig.Sources {
+	resolver := aiconfig.NewResolver(&fakeSettingsStore{}, aiconfig.EnvDefaults{
+		AnthropicAPIKey: "test-key",
+		AnthropicModel:  "test-model",
+		// OllamaURL deliberately omitted — Embedder will return nil.
+		OllamaURL:   "",
+		OllamaModel: "",
+	})
+	return &aiconfig.Sources{
+		Resolver:    resolver,
+		LLM:         &fakeLLMProvider{c: c},
+		Embed:       &fakeEmbedProvider{e: nil},
+		DefaultTeam: "test",
+	}
+}
+
 // --- helpers ---
 
 func callReq(kv ...any) mcplib.CallToolRequest {
@@ -141,7 +202,7 @@ func TestHandleKnowledgeStore_Success(t *testing.T) {
 	store := &mockStore{}
 	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
 
-	handler := internalmcp.HandleKnowledgeStore(store, embedder)
+	handler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
 	req := callReq(
 		"title", "Test Prompt",
 		"content", "Use bullet points.",
@@ -177,11 +238,50 @@ func TestHandleKnowledgeStore_Success(t *testing.T) {
 	}
 }
 
+func TestHandleKnowledgeStore_NilEmbedder_ReturnsToolError(t *testing.T) {
+	store := &mockStore{}
+
+	// newNilEmbedSources yields a Sources whose Embedder always returns nil.
+	handler := internalmcp.HandleKnowledgeStore(store, newNilEmbedSources(nil))
+	req := callReq(
+		"title", "Nil Embed Entry",
+		"content", "Some content.",
+		"type", "prompt",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected nil Go error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true when embedder is nil")
+	}
+	if len(store.entries) != 0 {
+		t.Errorf("expected 0 stored entries when embedding is unconfigured, got %d", len(store.entries))
+	}
+}
+
+func TestHandleKnowledgeSearch_NilEmbedder_ReturnsToolError(t *testing.T) {
+	store := &mockStore{}
+
+	// newNilEmbedSources yields a Sources whose Embedder always returns nil.
+	handler := internalmcp.HandleKnowledgeSearch(store, newNilEmbedSources(nil))
+	req := callReq("query", "any query text")
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected nil Go error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true when embedder is nil")
+	}
+}
+
 func TestHandleKnowledgeStore_MissingRequired(t *testing.T) {
 	store := &mockStore{}
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 
-	handler := internalmcp.HandleKnowledgeStore(store, embedder)
+	handler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
 	req := callReq("title", "No Content") // missing content and type
 
 	result, err := handler(context.Background(), req)
@@ -197,7 +297,7 @@ func TestHandleKnowledgeGet_Success(t *testing.T) {
 	store := &mockStore{}
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 
-	storeHandler := internalmcp.HandleKnowledgeStore(store, embedder)
+	storeHandler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
 	storeResult, _ := storeHandler(context.Background(), callReq("title", "Alpha", "content", "c", "type", "prompt"))
 	_ = storeResult
 
@@ -236,7 +336,7 @@ func TestHandleKnowledgeGet_MissingID(t *testing.T) {
 func TestHandleKnowledgeList(t *testing.T) {
 	store := &mockStore{}
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
-	storeHandler := internalmcp.HandleKnowledgeStore(store, embedder)
+	storeHandler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
 
 	for _, title := range []string{"A", "B", "C"} {
 		storeHandler(context.Background(), callReq("title", title, "content", "c", "type", "prompt"))
@@ -260,11 +360,68 @@ func TestHandleKnowledgeList(t *testing.T) {
 	}
 }
 
+func TestHandleKnowledgeStore_PublishesLiveEvent(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+	bus := &fakeBus{}
+
+	handler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil), bus)
+	req := callReq(
+		"title", "Event Test",
+		"content", "Some content.",
+		"type", "prompt",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+
+	evs := bus.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 live event, got %d", len(evs))
+	}
+	ev := evs[0]
+	if ev.Type != live.TypeKnowledgeStored {
+		t.Errorf("event type = %q, want %q", ev.Type, live.TypeKnowledgeStored)
+	}
+	if ev.Title != "Event Test" {
+		t.Errorf("title = %q, want Event Test", ev.Title)
+	}
+	if ev.EntryID == "" {
+		t.Error("expected non-empty EntryID")
+	}
+}
+
+func TestHandleKnowledgeStore_NilBus_NoPanic(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	// No bus argument — should not panic.
+	handler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
+	req := callReq(
+		"title", "No Bus Entry",
+		"content", "Content.",
+		"type", "prompt",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+}
+
 func TestHandleKnowledgeDelete_Success(t *testing.T) {
 	store := &mockStore{}
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 
-	storeHandler := internalmcp.HandleKnowledgeStore(store, embedder)
+	storeHandler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
 	storeHandler(context.Background(), callReq("title", "ToDelete", "content", "c", "type", "prompt"))
 
 	id := store.entries[0].ID

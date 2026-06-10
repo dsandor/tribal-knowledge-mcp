@@ -56,7 +56,7 @@ type TeamSettings struct {
 	Domains            []string // domain taxonomy labels
 	ClusterThreshold   float64
 	PipelineMinEntries int
-	AgentModel         string
+	AgentModel         string    `json:"agent_model"`
 	AnthropicAPIKey    string    `json:"anthropic_api_key"`
 	AnthropicModel     string    `json:"anthropic_model"`
 	OllamaURL          string    `json:"ollama_url"`
@@ -96,6 +96,7 @@ type TeamStore interface {
 
 	// Users
 	UpsertUser(ctx context.Context, u User) (string, error)
+	GetUserByID(ctx context.Context, id string) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByExternalID(ctx context.Context, externalID string) (*User, error)
 	ListUsers(ctx context.Context, teamID string) ([]User, error)

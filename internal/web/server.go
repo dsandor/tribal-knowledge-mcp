@@ -10,8 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/auth"
-	"github.com/dsandor/memory/internal/llm"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 )
 
@@ -20,6 +21,13 @@ import (
 type AllStore interface {
 	storage.AgentStore
 	storage.TeamStore
+}
+
+// LiveHub extends live.EventBus with the subscriber count needed for capacity
+// guarding in the SSE handler. *live.Hub satisfies this interface.
+type LiveHub interface {
+	live.EventBus
+	SubscriberCount() int
 }
 
 // Server wraps a chi router with REST API routes and SPA static serving.
@@ -32,7 +40,9 @@ type Server struct {
 	devBypassAuth   bool       // skips auth middleware — development only
 	rateLimitRPS    int        // 0 means disabled
 	trustXFF        bool       // only enable when deployed behind a known reverse proxy
-	agentLLM        llm.Client // optional; enables the /refactor endpoint
+	aiSrc           *aiconfig.Sources // optional; enables the /refactor endpoint
+	hub             LiveHub
+	presence        *live.Presence
 }
 
 // NewServer wires all routes and returns a ready Server.
@@ -59,9 +69,20 @@ func (s *Server) WithOIDCSecret(secret string) *Server {
 	return s
 }
 
-// WithAgentLLM sets the LLM client used by the agent refactor endpoint.
-func (s *Server) WithAgentLLM(client llm.Client) *Server {
-	s.agentLLM = client
+// WithAISources sets the AI sources used by the agent refactor endpoint.
+// Clients are resolved per request so saved team settings take effect immediately.
+func (s *Server) WithAISources(src *aiconfig.Sources) *Server {
+	s.aiSrc = src
+	return s
+}
+
+// WithLive attaches a live event hub and presence tracker to the server,
+// enabling the /api/activity/stream SSE endpoint and web-side event publishing.
+// Calling this is optional; if not called, the stream endpoint returns 503
+// and publish calls are no-ops, keeping the rest of the server fully functional.
+func (s *Server) WithLive(hub LiveHub, presence *live.Presence) *Server {
+	s.hub = hub
+	s.presence = presence
 	return s
 }
 
@@ -96,6 +117,8 @@ func (s *Server) WithTrustXFF(trust bool) *Server {
 
 // effectiveAuthMW returns RequireAuth normally, or a pass-through that injects
 // superadmin context when DEV_BYPASS_AUTH is enabled.
+// When a live presence tracker is configured, it is wired as a presence hook
+// into the middleware so every authenticated request is reflected in presence.
 func (s *Server) effectiveAuthMW() func(http.Handler) http.Handler {
 	if s.devBypassAuth {
 		return func(next http.Handler) http.Handler {
@@ -104,7 +127,20 @@ func (s *Server) effectiveAuthMW() func(http.Handler) http.Handler {
 			})
 		}
 	}
+	if s.presence != nil {
+		return auth.RequireAuth(s.store, &presenceToucherAdapter{s.presence})
+	}
 	return auth.RequireAuth(s.store)
+}
+
+// presenceToucherAdapter adapts *live.Presence to auth.PresenceToucher,
+// keeping internal/auth free of any dependency on internal/live.
+type presenceToucherAdapter struct {
+	p *live.Presence
+}
+
+func (a *presenceToucherAdapter) Touch(teamID, actorID, display string) {
+	a.p.Touch(teamID, live.ActorRef{ID: actorID, Display: display})
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +205,7 @@ func (s *Server) routes() {
 		r.Get("/api/analytics/contributions", s.handleContributions)
 		r.Get("/api/knowledge/trending", s.handleKnowledgeTrending)
 		r.Get("/api/activity", s.handleActivityFeed)
+		r.Get("/api/activity/stream", s.handleActivityStream)
 	})
 
 	// Curator routes
@@ -197,6 +234,8 @@ func (s *Server) routes() {
 		r.Put("/api/users/{id}/role", s.handleSetUserRole)
 		r.Get("/api/settings", s.handleGetSettings)
 		r.Put("/api/settings", s.handlePutSettings)
+		r.Get("/api/settings/models", s.handleGetModels)
+		r.Post("/api/settings/import-env", s.handleImportEnv)
 	})
 
 	// Superadmin routes

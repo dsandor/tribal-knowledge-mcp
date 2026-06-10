@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 
+	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
 )
 
@@ -13,6 +14,29 @@ type mockLLM struct {
 
 func (m *mockLLM) Complete(_ context.Context, _ string) (string, error) {
 	return m.response, m.err
+}
+
+// mockAISource implements AISource for tests. analysisClient, agentClient, and
+// improvementClient can each be set independently; nil means "not configured".
+type mockAISource struct {
+	analysisClient    llm.Client
+	agentClient       llm.Client
+	improvementClient llm.Client
+}
+
+func (s *mockAISource) AnalysisLLM(_ context.Context, _ string) llm.Client    { return s.analysisClient }
+func (s *mockAISource) AgentLLM(_ context.Context, _ string) llm.Client       { return s.agentClient }
+func (s *mockAISource) ImprovementLLM(_ context.Context, _ string) llm.Client { return s.improvementClient }
+
+// newSrc is a convenience constructor for a mockAISource where the analysis and
+// improvement clients use the same mock (the common case in existing tests).
+func newSrc(llmMock llm.Client) *mockAISource {
+	return &mockAISource{analysisClient: llmMock, improvementClient: llmMock}
+}
+
+// newSrcWithAgent sets all three clients independently.
+func newSrcWithAgent(analysis, agentLLM, improvement llm.Client) *mockAISource {
+	return &mockAISource{analysisClient: analysis, agentClient: agentLLM, improvementClient: improvement}
 }
 
 type mockAnalysisStore struct {

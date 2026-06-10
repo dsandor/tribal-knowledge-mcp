@@ -111,12 +111,19 @@ export interface TrendingEntry extends KnowledgeEntry {
   avg_outcome: number
 }
 
+export interface ActorRef {
+  id: string
+  display: string
+}
+
 export interface ActivityEvent {
   id: string
-  event_type: string
-  actor_id: string
-  entry_id: string
-  metadata: Record<string, string>
+  type: string
+  actor: ActorRef
+  fragment?: string
+  entry_id?: string
+  title?: string
+  meta?: Record<string, string>
   created_at: string
 }
 
@@ -261,6 +268,50 @@ export async function putSettings(settings: object) {
     body: JSON.stringify(settings),
   });
   if (!r.ok) throw new Error('put settings failed');
+  return r.json();
+}
+
+// --- AI / Effective settings ---
+export interface AIFieldValue {
+  effective: string;
+  saved: string;
+  env: string;
+  source: 'saved' | 'env' | 'none';
+}
+
+export interface AISettings {
+  anthropic_api_key: AIFieldValue;
+  anthropic_model: AIFieldValue;
+  agent_model: AIFieldValue;
+  ollama_url: AIFieldValue;
+  ollama_model: AIFieldValue;
+}
+
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ModelOptions {
+  anthropic: ModelOption[];
+  ollama: ModelOption[];
+  anthropic_source: 'api' | 'fallback';
+  ollama_source: 'api' | 'unavailable';
+}
+
+export async function fetchModelOptions(): Promise<ModelOptions> {
+  const r = await apiFetch('/api/settings/models');
+  if (!r.ok) throw new Error(`fetch model options failed: ${r.status}`);
+  return r.json();
+}
+
+export async function importEnvSettings(fields: string[]): Promise<{ ai: AISettings }> {
+  const r = await apiFetch('/api/settings/import-env', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  if (!r.ok) throw new Error(`import env settings failed: ${r.status}`);
   return r.json();
 }
 

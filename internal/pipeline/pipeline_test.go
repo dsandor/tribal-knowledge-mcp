@@ -22,7 +22,7 @@ func TestPipeline_Run_CreatesClustersAndSnapshot(t *testing.T) {
 	// mockLLM responses: summarize returns JSON, score/detect return valid JSON too
 	llmMock := &mockLLM{response: `{"title":"Finance","summary":"Finance entries.","coherence":0.8,"specificity":0.7,"gaps":[]}`}
 
-	p := New(store, llmMock, Config{
+	p := New(store, newSrc(llmMock), Config{
 		MinEntries:       2,
 		Interval:         time.Hour,
 		ClusterThreshold: 0.9,
@@ -55,6 +55,43 @@ func TestPipeline_Run_CreatesClustersAndSnapshot(t *testing.T) {
 	}
 }
 
+// TestPipeline_Run_SkipsWhenAnalysisLLMNil verifies that when AnalysisLLM returns
+// nil (no Anthropic key configured), Run returns nil error and does not write any
+// pipeline-run records, clusters, or snapshots to the store.
+func TestPipeline_Run_SkipsWhenAnalysisLLMNil(t *testing.T) {
+	store := &mockAnalysisStore{
+		entries: []storage.KnowledgeEntry{
+			{ID: "a", Title: "Entry A", Content: "Finance pattern", Domain: "finance"},
+		},
+		embeddings: map[string][]float32{
+			"a": {1, 0, 0, 0},
+		},
+	}
+
+	// mockAISource with a nil analysisClient simulates "no Anthropic key configured".
+	src := &mockAISource{analysisClient: nil}
+
+	p := New(store, src, Config{
+		MinEntries:       1,
+		Interval:         time.Hour,
+		ClusterThreshold: 0.9,
+	})
+
+	err := p.Run(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("expected nil error when AnalysisLLM is nil, got: %v", err)
+	}
+	if len(store.runs) != 0 {
+		t.Errorf("expected 0 pipeline run records written, got %d", len(store.runs))
+	}
+	if len(store.clusters) != 0 {
+		t.Errorf("expected 0 clusters written, got %d", len(store.clusters))
+	}
+	if len(store.snapshots) != 0 {
+		t.Errorf("expected 0 snapshots written, got %d", len(store.snapshots))
+	}
+}
+
 func TestPipeline_Run_NoClusters_DissimilarEntries(t *testing.T) {
 	store := &mockAnalysisStore{
 		entries: []storage.KnowledgeEntry{
@@ -68,7 +105,7 @@ func TestPipeline_Run_NoClusters_DissimilarEntries(t *testing.T) {
 	}
 	llmMock := &mockLLM{response: `{"gaps":[]}`}
 
-	p := New(store, llmMock, Config{
+	p := New(store, newSrc(llmMock), Config{
 		MinEntries:       1,
 		Interval:         time.Hour,
 		ClusterThreshold: 0.9,
@@ -100,7 +137,7 @@ func TestPipeline_Run_VersionIncrement(t *testing.T) {
 	}
 	llmMock := &mockLLM{response: `{"gaps":[]}`}
 
-	p := New(store, llmMock, Config{MinEntries: 1, Interval: time.Hour, ClusterThreshold: 0.9})
+	p := New(store, newSrc(llmMock), Config{MinEntries: 1, Interval: time.Hour, ClusterThreshold: 0.9})
 	if err := p.Run(context.Background(), "test"); err != nil {
 		t.Fatalf("pipeline run: %v", err)
 	}
@@ -127,11 +164,11 @@ func TestPipeline_Run_GeneratesAgentWhenStoreProvided(t *testing.T) {
 	llmMock := &mockLLM{response: `{"title":"Finance","summary":"Finance entries.","coherence":0.8,"specificity":0.7,"gaps":[]}`}
 	agentLLMMock := &mockLLM{response: `{"system_prompt":"You are a finance agent.","instructions":"Use DCF.","anti_patterns":"No guessing."}`}
 
-	p := New(baseStore, llmMock, Config{
+	p := New(baseStore, newSrcWithAgent(llmMock, agentLLMMock, llmMock), Config{
 		MinEntries:       2,
 		Interval:         time.Hour,
 		ClusterThreshold: 0.9,
-	}).WithAgentGeneration(agentStore, agentLLMMock)
+	}).WithAgentGeneration(agentStore)
 
 	if err := p.Run(context.Background(), "test"); err != nil {
 		t.Fatalf("pipeline run: %v", err)
@@ -172,12 +209,13 @@ func TestPipeline_Run_IncrementsAgentVersion(t *testing.T) {
 
 	llmMock := &mockLLM{response: `{"title":"Finance","summary":"Finance entries.","coherence":0.8,"specificity":0.7,"gaps":[]}`}
 	agentLLMMock := &mockLLM{response: `{"system_prompt":"You are a finance agent.","instructions":"Use DCF.","anti_patterns":"No guessing."}`}
+	src := newSrcWithAgent(llmMock, agentLLMMock, llmMock)
 
-	p := New(baseStore, llmMock, Config{
+	p := New(baseStore, src, Config{
 		MinEntries:       2,
 		Interval:         time.Hour,
 		ClusterThreshold: 0.9,
-	}).WithAgentGeneration(agentStore, agentLLMMock)
+	}).WithAgentGeneration(agentStore)
 
 	// First run creates the agent at version 1.
 	if err := p.Run(context.Background(), "test"); err != nil {

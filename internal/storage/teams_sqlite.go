@@ -145,6 +145,21 @@ func (s *SQLiteStore) UpsertUser(ctx context.Context, u User) (string, error) {
 	return id, nil
 }
 
+func (s *SQLiteStore) GetUserByID(ctx context.Context, id string) (*User, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, COALESCE(team_id,''), email, name, external_id, password_hash, role, manually_assigned, created_at
+		FROM users WHERE id = ?
+	`, id)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("user %q: %w", id, ErrNotFound)
+		}
+		return nil, fmt.Errorf("get user by id: %w", err)
+	}
+	return u, nil
+}
+
 func (s *SQLiteStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, COALESCE(team_id,''), email, name, external_id, password_hash, role, manually_assigned, created_at

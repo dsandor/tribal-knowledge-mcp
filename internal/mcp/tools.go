@@ -7,7 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -19,7 +20,11 @@ type storeResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...live.EventBus) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	var eventBus live.EventBus
+	if len(bus) > 0 {
+		eventBus = bus[0]
+	}
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		title := req.GetString("title", "")
 		content := req.GetString("content", "")
@@ -76,6 +81,15 @@ func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func
 			Tags:        tags,
 		}
 
+		// Resolve actor/team once; reused for both the embedder call and the
+		// live event so we never call resolveActorTeam twice.
+		teamID, actor := resolveActorTeam(ctx)
+
+		// Resolve embedder per call so saved team settings take effect immediately.
+		embedder := src.Embedder(ctx, teamID)
+		if embedder == nil {
+			return mcplib.NewToolResultError("embedding not configured — set OLLAMA_URL to enable knowledge storage"), nil
+		}
 		emb, err := embedder.Embed(ctx, content)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
@@ -85,6 +99,16 @@ func HandleKnowledgeStore(store storage.Store, embedder embedding.Embedder) func
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 		}
+
+		// Best-effort live event — must not affect the tool response or panic
+		// when eventBus is nil (publishEvent is nil-safe).
+		publishEvent(eventBus, live.LiveEvent{
+			Type:    live.TypeKnowledgeStored,
+			TeamID:  teamID,
+			Actor:   actor,
+			EntryID: id,
+			Title:   live.CapFragment(title),
+		})
 
 		out, _ := json.Marshal(storeResult{ID: id, Status: "stored"})
 		return mcplib.NewToolResultText(string(out)), nil

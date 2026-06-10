@@ -3,14 +3,19 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 
-	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, embedder embedding.Embedder) {
+// RegisterKnowledgeExtTools registers knowledge_search and knowledge_rate.
+// bus may be nil; when non-nil a TypeKnowledgeRated live event is published on
+// each successful rating.
+func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, src *aiconfig.Sources, bus live.EventBus) {
 	s.AddTool(
 		mcplib.NewTool("knowledge_search",
 			mcplib.WithDescription("Call before drafting whenever a task resembles past work, to retrieve relevant patterns, rules, and example outputs by semantic similarity. Use natural-language queries. Always note the entry IDs returned so you can call knowledge_use and knowledge_rate after applying them."),
@@ -18,7 +23,7 @@ func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, embedde
 			mcplib.WithString("domain", mcplib.Description("Optional domain filter")),
 			mcplib.WithNumber("top_k", mcplib.Description("Number of results (default 5, max 20)")),
 		),
-		HandleKnowledgeSearch(store, embedder),
+		HandleKnowledgeSearch(store, src),
 	)
 	s.AddTool(
 		mcplib.NewTool("knowledge_rate",
@@ -26,11 +31,11 @@ func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, embedde
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Entry UUID")),
 			mcplib.WithNumber("rating", mcplib.Required(), mcplib.Description("1.0 to 5.0")),
 		),
-		HandleKnowledgeRate(store),
+		HandleKnowledgeRate(store, bus),
 	)
 }
 
-func HandleKnowledgeSearch(store storage.Store, embedder embedding.Embedder) server.ToolHandlerFunc {
+func HandleKnowledgeSearch(store storage.Store, src *aiconfig.Sources) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		query := req.GetString("query", "")
 		if query == "" {
@@ -43,6 +48,14 @@ func HandleKnowledgeSearch(store storage.Store, embedder embedding.Embedder) ser
 		}
 		if topK > 20 {
 			topK = 20
+		}
+
+		// Resolve embedder per call so saved team settings take effect immediately.
+		// DefaultTeam fallback is applied inside src.Embedder when teamID is empty.
+		teamID, _ := resolveActorTeam(ctx)
+		embedder := src.Embedder(ctx, teamID)
+		if embedder == nil {
+			return mcplib.NewToolResultError("embedding not configured — set OLLAMA_URL to enable knowledge search"), nil
 		}
 
 		vec, err := embedder.Embed(ctx, query)
@@ -77,7 +90,9 @@ func HandleKnowledgeSearch(store storage.Store, embedder embedding.Embedder) ser
 	}
 }
 
-func HandleKnowledgeRate(store storage.Store) server.ToolHandlerFunc {
+// HandleKnowledgeRate returns a handler that rates a knowledge entry.
+// bus may be nil; when non-nil a TypeKnowledgeRated live event is published on success.
+func HandleKnowledgeRate(store storage.Store, bus live.EventBus) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		id := req.GetString("id", "")
 		if id == "" {
@@ -90,6 +105,17 @@ func HandleKnowledgeRate(store storage.Store) server.ToolHandlerFunc {
 		if err := store.RateEntry(ctx, id, rating); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("rate entry: %v", err)), nil
 		}
+
+		// Publish live event (best-effort, nil-safe).
+		teamID, actor := resolveActorTeam(ctx)
+		publishEvent(bus, live.LiveEvent{
+			Type:    live.TypeKnowledgeRated,
+			TeamID:  teamID,
+			Actor:   actor,
+			EntryID: id,
+			Meta:    map[string]string{"rating": strconv.FormatFloat(rating, 'f', -1, 64)},
+		})
+
 		return mcplib.NewToolResultText(fmt.Sprintf("Entry %s rated %.1f", id, rating)), nil
 	}
 }

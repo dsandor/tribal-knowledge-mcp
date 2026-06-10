@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
-	"github.com/dsandor/memory/internal/embedding"
-	"github.com/dsandor/memory/internal/llm"
+	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // RegisterEnrichContext registers the enrich_context tool with the MCP server.
-// llmClient may be nil; in that case the improved_prompt is the rule-enhanced version only.
-func RegisterEnrichContext(s *server.MCPServer, store storage.Store, embedder embedding.Embedder, llmClient llm.Client) {
+// src provides per-call resolved LLM and embedder; when both resolve to nil the
+// improved_prompt is the rule-enhanced version only.
+// bus may be nil; in that case no live events are published.
+func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconfig.Sources, bus live.EventBus) {
 	s.AddTool(
 		mcplib.NewTool("enrich_context",
 			mcplib.WithDescription("ALWAYS call this FIRST, at the start of every user turn, before planning or drafting a response. Pass the raw user message plus optional team/category/user context. Returns improved_prompt (enhanced with applicable rules), applicable_rules (rule titles and content), relevant_knowledge (top matching entries with IDs), and missing_inputs (checklist of any context that would help). Idempotent and cheap — when in doubt, call it."),
@@ -24,7 +28,7 @@ func RegisterEnrichContext(s *server.MCPServer, store storage.Store, embedder em
 			mcplib.WithString("category", mcplib.Description("Domain/category for scoping rules and knowledge search")),
 			mcplib.WithString("user", mcplib.Description("User identifier for user-scoped rules")),
 		),
-		HandleEnrichContext(store, embedder, llmClient),
+		HandleEnrichContext(store, src, bus),
 	)
 }
 
@@ -55,7 +59,9 @@ type enrichContextResponse struct {
 
 // HandleEnrichContext returns a ToolHandlerFunc that enriches a prompt with applicable rules,
 // relevant knowledge entries, and optionally an LLM-improved version of the prompt.
-func HandleEnrichContext(store storage.Store, embedder embedding.Embedder, llmClient llm.Client) server.ToolHandlerFunc {
+// bus may be nil; when non-nil one TypeEnrichContext live event is published per call
+// and one ActivityEvent is persisted to the store (best-effort, never fails the tool call).
+func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.EventBus) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		prompt := req.GetString("prompt", "")
 		if prompt == "" {
@@ -64,6 +70,33 @@ func HandleEnrichContext(store storage.Store, embedder embedding.Embedder, llmCl
 		team := req.GetString("team", "")
 		category := req.GetString("category", "")
 		user := req.GetString("user", "")
+
+		// --- Resolve actor/team for live events ---
+		teamID, actor := resolveActorTeam(ctx)
+		// If the tool received an explicit "team" or "user" arg and we are in
+		// the stdio fallback (no auth context), prefer the tool args.
+		if actor.ID == "stdio" {
+			if user != "" {
+				actor = live.ActorRef{ID: user, Display: user}
+			}
+			if team != "" {
+				teamID = team
+			}
+		}
+
+		// Resolve effective team for config lookups: prefer auth-resolved teamID,
+		// then explicit tool arg, then default.
+		effectiveTeam := teamID
+		if effectiveTeam == "" && team != "" {
+			effectiveTeam = team
+		}
+		if effectiveTeam == "" {
+			effectiveTeam = src.DefaultTeam
+		}
+
+		// Resolve AI clients per call so saved settings take effect immediately.
+		embedder := src.Embedder(ctx, effectiveTeam)
+		llmClient := src.AnalysisLLM(ctx, effectiveTeam)
 
 		// --- Step 1: Fetch applicable rules ---
 		applicableRules := []enrichContextRule{}
@@ -140,6 +173,28 @@ func HandleEnrichContext(store storage.Store, embedder embedding.Embedder, llmCl
 			ApplicableRules:   applicableRules,
 			RelevantKnowledge: relevantKnowledge,
 			MissingInputs:     missingInputs,
+		}
+
+		// --- Publish live event (best-effort, nil-safe) ---
+		fragment := live.CapFragment(prompt)
+		publishEvent(bus, live.LiveEvent{
+			Type:     live.TypeEnrichContext,
+			TeamID:   teamID,
+			Actor:    actor,
+			Fragment: fragment,
+		})
+
+		// --- Persist activity to feed (best-effort, never fails the tool call) ---
+		if err := store.RecordActivity(ctx, storage.ActivityEvent{
+			EventType: live.TypeEnrichContext,
+			ActorID:   actor.ID,
+			Metadata: map[string]string{
+				"fragment": fragment,
+				"display":  actor.Display,
+			},
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			slog.Warn("enrich_context: record activity", "err", err)
 		}
 
 		data, err := json.Marshal(resp)
