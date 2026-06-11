@@ -97,7 +97,7 @@ func (s *PostgresStore) GetTrendingEntries(ctx context.Context, teamID string, d
 	// signal_score = (avg_outcome * 2 + usage_count * 0.5) * (1 + ln(1 + usage_count))
 	const query = `
 		SELECT
-			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 			e.author, e.team, e.created_at, e.updated_at, e.version,
 			e.rating, e.usage_count, e.team_id, e.status,
 			COALESCE(u.cnt7,  0)        AS usage_count_7d,
@@ -137,8 +137,9 @@ func (s *PostgresStore) GetTrendingEntries(ctx context.Context, teamID string, d
 	for rows.Next() {
 		var t TrendingEntry
 		var tagsRaw []byte
+		var autoTagsRaw []byte
 		if err := rows.Scan(
-			&t.ID, &t.Type, &t.Title, &t.Content, &t.Description, &t.Domain, &tagsRaw,
+			&t.ID, &t.Type, &t.Title, &t.Content, &t.Description, &t.Domain, &tagsRaw, &autoTagsRaw,
 			&t.Author, &t.Team, &t.CreatedAt, &t.UpdatedAt, &t.Version,
 			&t.Rating, &t.UsageCount, &t.TeamID, &t.Status,
 			&t.UsageCount7d, &t.UsageCount30d, &t.AvgOutcome, &t.SignalScore,
@@ -148,6 +149,9 @@ func (s *PostgresStore) GetTrendingEntries(ctx context.Context, teamID string, d
 		if err := json.Unmarshal(tagsRaw, &t.Tags); err != nil {
 			t.Tags = []string{}
 		}
+		if err := json.Unmarshal(autoTagsRaw, &t.AutoTags); err != nil {
+			t.AutoTags = []string{}
+		}
 		results = append(results, t)
 	}
 	return results, rows.Err()
@@ -156,7 +160,7 @@ func (s *PostgresStore) GetTrendingEntries(ctx context.Context, teamID string, d
 func (s *PostgresStore) GetWeakSignalEntries(ctx context.Context, teamID string, minRatings int, maxAvgOutcome float64) ([]KnowledgeEntry, error) {
 	const query = `
 		SELECT
-			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 			e.author, e.team, e.created_at, e.updated_at, e.version,
 			e.rating, e.usage_count, e.team_id, e.status
 		FROM entries e

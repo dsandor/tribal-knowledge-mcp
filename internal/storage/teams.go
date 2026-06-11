@@ -51,17 +51,30 @@ type APIKey struct {
 	LastUsedAt *time.Time
 }
 
+// AITouchpoint configures the provider and model for one AI touchpoint.
+// Valid providers: "anthropic" | "ollama". Empty Model uses the provider's
+// touchpoint default (see aiconfig.LLMForTouchpoint).
+type AITouchpoint struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 type TeamSettings struct {
 	TeamID             string
 	Domains            []string // domain taxonomy labels
 	ClusterThreshold   float64
 	PipelineMinEntries int
-	AgentModel         string    `json:"agent_model"`
-	AnthropicAPIKey    string    `json:"anthropic_api_key"`
-	AnthropicModel     string    `json:"anthropic_model"`
-	OllamaURL          string    `json:"ollama_url"`
-	OllamaModel        string    `json:"ollama_model"`
-	UpdatedAt          time.Time
+	AgentModel         string `json:"agent_model"`
+	AnthropicAPIKey    string `json:"anthropic_api_key"`
+	AnthropicModel     string `json:"anthropic_model"`
+	OllamaURL          string `json:"ollama_url"`
+	OllamaModel        string `json:"ollama_model"`
+	LLMProvider        string `json:"llm_provider"`     // "" | "anthropic" | "ollama"; empty means anthropic
+	OllamaLLMModel     string `json:"ollama_llm_model"` // chat model; distinct from OllamaModel (embeddings)
+	// AITouchpoints maps touchpoint name to per-touchpoint AI config.
+	// Valid keys: "analysis", "agents", "improvement", "enrichment".
+	AITouchpoints map[string]AITouchpoint `json:"ai_touchpoints"`
+	UpdatedAt     time.Time
 }
 
 type AuthConfig struct {

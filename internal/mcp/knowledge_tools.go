@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -62,7 +63,13 @@ func HandleKnowledgeSearch(store storage.Store, src *aiconfig.Sources) server.To
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("embed query: %v", err)), nil
 		}
-		results, err := store.SearchSimilar(ctx, vec, topK)
+		// Over-fetch so the post-search domain/team filters can still fill
+		// topK slots when other teams' entries crowd the similarity space.
+		fetchK := topK * 2
+		if fetchK > 40 {
+			fetchK = 40
+		}
+		results, err := store.SearchSimilar(ctx, vec, fetchK)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("search: %v", err)), nil
 		}
@@ -76,6 +83,22 @@ func HandleKnowledgeSearch(store storage.Store, src *aiconfig.Sources) server.To
 				}
 			}
 			results = filtered
+		}
+
+		// Team-scoping: filter out entries the caller cannot access.
+		tc := auth.GetTeamContext(ctx)
+		{
+			filtered := results[:0]
+			for _, r := range results {
+				if auth.CanAccess(tc, r.Entry.TeamID) {
+					filtered = append(filtered, r)
+				}
+			}
+			results = filtered
+		}
+
+		if len(results) > topK {
+			results = results[:topK]
 		}
 
 		if len(results) == 0 {
@@ -102,11 +125,17 @@ func HandleKnowledgeRate(store storage.Store, bus live.EventBus) server.ToolHand
 		if rating < 1 || rating > 5 {
 			return mcplib.NewToolResultError("rating must be 1–5"), nil
 		}
+
+		if _, errResult := fetchEntryForCaller(ctx, store, id); errResult != nil {
+			return errResult, nil
+		}
+
 		if err := store.RateEntry(ctx, id, rating); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("rate entry: %v", err)), nil
 		}
 
-		// Publish live event (best-effort, nil-safe).
+		// Publish live event (best-effort, nil-safe). This context read is for
+		// event attribution only — access gating happened in fetchEntryForCaller.
 		teamID, actor := resolveActorTeam(ctx)
 		publishEvent(bus, live.LiveEvent{
 			Type:    live.TypeKnowledgeRated,

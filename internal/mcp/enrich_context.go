@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -96,7 +97,7 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 
 		// Resolve AI clients per call so saved settings take effect immediately.
 		embedder := src.Embedder(ctx, effectiveTeam)
-		llmClient := src.AnalysisLLM(ctx, effectiveTeam)
+		llmClient := src.EnrichmentLLM(ctx, effectiveTeam)
 
 		// --- Step 1: Fetch applicable rules ---
 		applicableRules := []enrichContextRule{}
@@ -123,8 +124,25 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 		if embedder != nil {
 			vec, err := embedder.Embed(ctx, prompt)
 			if err == nil { // degrade gracefully — return partial result on store/embed errors
-				results, err := store.SearchSimilar(ctx, vec, 5)
+				const wantK = 5
+				fetchK := wantK * 2
+				if fetchK > 40 {
+					fetchK = 40
+				}
+				results, err := store.SearchSimilar(ctx, vec, fetchK)
 				if err == nil { // degrade gracefully — return partial result on store/embed errors
+					// Team-scoping: filter out entries the caller cannot access.
+					tc := auth.GetTeamContext(ctx)
+					filtered := results[:0]
+					for _, r := range results {
+						if auth.CanAccess(tc, r.Entry.TeamID) {
+							filtered = append(filtered, r)
+						}
+					}
+					results = filtered
+					if len(results) > wantK {
+						results = results[:wantK]
+					}
 					for _, r := range results {
 						relevantKnowledge = append(relevantKnowledge, enrichContextKnowledge{
 							ID:      r.Entry.ID,

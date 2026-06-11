@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -20,7 +21,8 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 			mcplib.WithMIMEType("application/json"),
 		),
 		resourceHandler(func(ctx context.Context, _ mcplib.ReadResourceRequest) (string, error) {
-			entries, err := store.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "approved"})
+			teamID, _ := resolveActorTeam(ctx)
+			entries, err := store.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "approved", TeamID: teamID})
 			if err != nil {
 				return "", fmt.Errorf("list entries: %w", err)
 			}
@@ -38,7 +40,8 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 			mcplib.WithMIMEType("application/json"),
 		),
 		resourceHandler(func(ctx context.Context, _ mcplib.ReadResourceRequest) (string, error) {
-			entries, err := store.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "approved"})
+			teamID, _ := resolveActorTeam(ctx)
+			entries, err := store.ListEntries(ctx, storage.ListFilter{Limit: 10, Status: "approved", TeamID: teamID})
 			if err != nil {
 				return "", fmt.Errorf("list entries: %w", err)
 			}
@@ -56,7 +59,8 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 			mcplib.WithMIMEType("application/json"),
 		),
 		resourceHandler(func(ctx context.Context, _ mcplib.ReadResourceRequest) (string, error) {
-			agents, err := store.ListAgents(ctx)
+			teamID, _ := resolveActorTeam(ctx)
+			agents, err := store.ListAgents(ctx, teamID)
 			if err != nil {
 				return "", fmt.Errorf("list agents: %w", err)
 			}
@@ -82,7 +86,8 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 		),
 		resourceTemplateHandler(func(ctx context.Context, req mcplib.ReadResourceRequest) (string, error) {
 			domain := extractPathParam(req.Params.URI, "knowledge://domain/")
-			entries, err := store.ListEntries(ctx, storage.ListFilter{Domain: domain, Status: "approved", Limit: 50})
+			teamID, _ := resolveActorTeam(ctx)
+			entries, err := store.ListEntries(ctx, storage.ListFilter{Domain: domain, Status: "approved", Limit: 50, TeamID: teamID})
 			if err != nil {
 				return "", fmt.Errorf("list entries: %w", err)
 			}
@@ -101,7 +106,8 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 		),
 		resourceTemplateHandler(func(ctx context.Context, req mcplib.ReadResourceRequest) (string, error) {
 			clusterID := extractPathParam(req.Params.URI, "knowledge://cluster/")
-			clusters, err := store.ListClusters(ctx)
+			teamID, _ := resolveActorTeam(ctx)
+			clusters, err := store.ListClusters(ctx, teamID)
 			if err != nil {
 				return "", fmt.Errorf("list clusters: %w", err)
 			}
@@ -115,10 +121,11 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 			if len(entryIDs) == 0 {
 				return "[]", nil
 			}
+			tc := auth.GetTeamContext(ctx)
 			var result []storage.KnowledgeEntry
 			for _, id := range entryIDs {
 				e, err := store.GetEntry(ctx, id)
-				if err == nil && e != nil {
+				if err == nil && e != nil && auth.CanAccess(tc, e.TeamID) {
 					result = append(result, *e)
 				}
 			}
@@ -137,14 +144,19 @@ func RegisterResources(s *server.MCPServer, store storage.AgentStore) {
 		),
 		resourceTemplateHandler(func(ctx context.Context, req mcplib.ReadResourceRequest) (string, error) {
 			domain := extractPathParam(req.Params.URI, "agents://domain/")
-			agent, err := store.GetAgentByDomain(ctx, domain)
+			teamID, _ := resolveActorTeam(ctx)
+			a, err := store.GetAgentByDomain(ctx, domain, teamID)
 			if err != nil {
 				return "", fmt.Errorf("get agent: %w", err)
 			}
-			if agent == nil || agent.Status != storage.AgentStatusPublished {
+			if a == nil || a.Status != storage.AgentStatusPublished {
 				return "null", nil
 			}
-			data, err := json.Marshal(agent)
+			tc := auth.GetTeamContext(ctx)
+			if !auth.CanAccess(tc, a.TeamID) {
+				return "null", nil
+			}
+			data, err := json.Marshal(a)
 			if err != nil {
 				return "", err
 			}

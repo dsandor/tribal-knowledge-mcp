@@ -214,3 +214,70 @@ func TestEnvFieldAlwaysPopulated(t *testing.T) {
 		t.Errorf("AnthropicAPIKey.Env = %q, want env-key", cfg.AnthropicAPIKey.Env)
 	}
 }
+
+// Test: LLMProvider and OllamaLLMModel resolve correctly in all three scenarios.
+func TestEffectiveLLMProviderAndOllamaModel(t *testing.T) {
+	t.Run("saved wins over env", func(t *testing.T) {
+		saved := &storage.TeamSettings{
+			TeamID:         "t1",
+			LLMProvider:    "ollama",
+			OllamaLLMModel: "llama3.1",
+		}
+		envD := aiconfig.EnvDefaults{LLMProvider: "anthropic"}
+		r := aiconfig.NewResolver(&fakeStore{settings: saved}, envD)
+		cfg, err := r.Effective(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.LLMProvider.Effective != "ollama" {
+			t.Errorf("LLMProvider.Effective = %q, want ollama", cfg.LLMProvider.Effective)
+		}
+		if cfg.LLMProvider.Source != "saved" {
+			t.Errorf("LLMProvider.Source = %q, want saved", cfg.LLMProvider.Source)
+		}
+		if cfg.OllamaLLMModel.Effective != "llama3.1" {
+			t.Errorf("OllamaLLMModel.Effective = %q, want llama3.1", cfg.OllamaLLMModel.Effective)
+		}
+		if cfg.OllamaLLMModel.Source != "saved" {
+			t.Errorf("OllamaLLMModel.Source = %q, want saved", cfg.OllamaLLMModel.Source)
+		}
+	})
+
+	t.Run("env used when saved empty", func(t *testing.T) {
+		saved := &storage.TeamSettings{TeamID: "t1"} // LLMProvider and OllamaLLMModel empty
+		envD := aiconfig.EnvDefaults{LLMProvider: "ollama"}
+		r := aiconfig.NewResolver(&fakeStore{settings: saved}, envD)
+		cfg, err := r.Effective(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.LLMProvider.Effective != "ollama" {
+			t.Errorf("LLMProvider.Effective = %q, want ollama", cfg.LLMProvider.Effective)
+		}
+		if cfg.LLMProvider.Source != "env" {
+			t.Errorf("LLMProvider.Source = %q, want env", cfg.LLMProvider.Source)
+		}
+	})
+
+	t.Run("both empty yields none", func(t *testing.T) {
+		saved := &storage.TeamSettings{TeamID: "t1"}
+		envD := aiconfig.EnvDefaults{}
+		r := aiconfig.NewResolver(&fakeStore{settings: saved}, envD)
+		cfg, err := r.Effective(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.LLMProvider.Effective != "" {
+			t.Errorf("LLMProvider.Effective = %q, want empty", cfg.LLMProvider.Effective)
+		}
+		if cfg.LLMProvider.Source != "none" {
+			t.Errorf("LLMProvider.Source = %q, want none", cfg.LLMProvider.Source)
+		}
+		if cfg.OllamaLLMModel.Effective != "" {
+			t.Errorf("OllamaLLMModel.Effective = %q, want empty", cfg.OllamaLLMModel.Effective)
+		}
+		if cfg.OllamaLLMModel.Source != "none" {
+			t.Errorf("OllamaLLMModel.Source = %q, want none", cfg.OllamaLLMModel.Source)
+		}
+	})
+}

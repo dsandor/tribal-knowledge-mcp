@@ -73,12 +73,17 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 				anthropic_model      TEXT NOT NULL DEFAULT '',
 				ollama_url           TEXT NOT NULL DEFAULT '',
 				ollama_model         TEXT NOT NULL DEFAULT '',
+				llm_provider         TEXT NOT NULL DEFAULT '',
+				ollama_llm_model     TEXT NOT NULL DEFAULT '',
 				updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			)`},
 		{"team_settings_anthropic_api_key", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS anthropic_api_key TEXT NOT NULL DEFAULT ''`},
-		{"team_settings_anthropic_model",   `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS anthropic_model    TEXT NOT NULL DEFAULT ''`},
-		{"team_settings_ollama_url",        `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_url         TEXT NOT NULL DEFAULT ''`},
-		{"team_settings_ollama_model",      `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_model       TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_anthropic_model", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS anthropic_model    TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_ollama_url", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_url         TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_ollama_model", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_model       TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_llm_provider", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS llm_provider       TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_ollama_llm_model", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_llm_model   TEXT NOT NULL DEFAULT ''`},
+		{"team_settings_ai_touchpoints", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ai_touchpoints TEXT NOT NULL DEFAULT '{}'`},
 		{"auth_config", `
 			CREATE TABLE IF NOT EXISTS auth_config (
 				id                INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -487,15 +492,17 @@ func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash string) err
 func (s *PostgresStore) GetTeamSettings(ctx context.Context, teamID string) (*TeamSettings, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
-		       anthropic_api_key, anthropic_model, ollama_url, ollama_model, updated_at
+		       anthropic_api_key, anthropic_model, ollama_url, ollama_model,
+		       llm_provider, ollama_llm_model, ai_touchpoints, updated_at
 		FROM team_settings WHERE team_id = $1
 	`, teamID)
 	var ts TeamSettings
-	var domainsRaw []byte
+	var domainsRaw, aiTouchpointsRaw []byte
 	var updatedAt time.Time
 	err := row.Scan(
 		&ts.TeamID, &domainsRaw, &ts.ClusterThreshold, &ts.PipelineMinEntries, &ts.AgentModel,
-		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel, &updatedAt,
+		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel,
+		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsRaw, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -509,12 +516,18 @@ func (s *PostgresStore) GetTeamSettings(ctx context.Context, teamID string) (*Te
 				AnthropicModel:     "",
 				OllamaURL:          "",
 				OllamaModel:        "",
+				LLMProvider:        "",
+				OllamaLLMModel:     "",
+				AITouchpoints:      map[string]AITouchpoint{},
 			}, nil
 		}
 		return nil, fmt.Errorf("get team settings: %w", err)
 	}
 	if err := json.Unmarshal(domainsRaw, &ts.Domains); err != nil {
 		ts.Domains = []string{}
+	}
+	if err := json.Unmarshal(aiTouchpointsRaw, &ts.AITouchpoints); err != nil {
+		ts.AITouchpoints = map[string]AITouchpoint{}
 	}
 	ts.UpdatedAt = updatedAt
 	return &ts, nil
@@ -525,12 +538,21 @@ func (s *PostgresStore) PutTeamSettings(ctx context.Context, ts TeamSettings) er
 	if err != nil {
 		return fmt.Errorf("marshal domains: %w", err)
 	}
+	tps := ts.AITouchpoints
+	if tps == nil {
+		tps = map[string]AITouchpoint{}
+	}
+	aiTouchpointsJSON, err := json.Marshal(tps)
+	if err != nil {
+		return fmt.Errorf("marshal ai_touchpoints: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO team_settings (
 			team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
-			anthropic_api_key, anthropic_model, ollama_url, ollama_model, updated_at
+			anthropic_api_key, anthropic_model, ollama_url, ollama_model,
+			llm_provider, ollama_llm_model, ai_touchpoints, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
 		ON CONFLICT (team_id) DO UPDATE SET
 			domains              = EXCLUDED.domains,
 			cluster_threshold    = EXCLUDED.cluster_threshold,
@@ -540,9 +562,13 @@ func (s *PostgresStore) PutTeamSettings(ctx context.Context, ts TeamSettings) er
 			anthropic_model      = EXCLUDED.anthropic_model,
 			ollama_url           = EXCLUDED.ollama_url,
 			ollama_model         = EXCLUDED.ollama_model,
+			llm_provider         = EXCLUDED.llm_provider,
+			ollama_llm_model     = EXCLUDED.ollama_llm_model,
+			ai_touchpoints       = EXCLUDED.ai_touchpoints,
 			updated_at           = NOW()
 	`, ts.TeamID, string(domainsJSON), ts.ClusterThreshold, ts.PipelineMinEntries, ts.AgentModel,
-		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel)
+		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel,
+		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON))
 	if err != nil {
 		return fmt.Errorf("put team settings: %w", err)
 	}

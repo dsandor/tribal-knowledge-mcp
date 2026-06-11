@@ -102,6 +102,27 @@ func main() {
 		bootstrapSuperadmin(store, cfg.SuperadminKey)
 	}
 
+	// Single-team deployments converge legacy team-less rows onto the one
+	// real team. Multi-team installs are left untouched (ownership unknown).
+	{
+		bfCtx := context.Background()
+		if teams, err := store.ListTeams(bfCtx); err == nil && len(teams) == 1 {
+			if err := store.BackfillTeamID(bfCtx, teams[0].ID); err != nil {
+				slog.Error("team backfill failed", "err", err)
+			} else {
+				slog.Info("team backfill applied", "team", teams[0].ID)
+			}
+		}
+
+		// Any run still "running" at boot belongs to a dead process — mark it
+		// failed so the runs list is honest and the next interval run starts clean.
+		if n, err := store.MarkInterruptedRuns(bfCtx); err != nil {
+			slog.Error("mark interrupted pipeline runs failed", "err", err)
+		} else if n > 0 {
+			slog.Info("marked interrupted pipeline runs", "count", n)
+		}
+	}
+
 	// Build the AI sources layer. Clients are resolved per call so saved team
 	// settings (AI config) take effect immediately without a restart.
 	envDefaults := aiconfig.EnvDefaults{
@@ -110,6 +131,8 @@ func main() {
 		AgentModel:      cfg.AgentModel,
 		OllamaURL:       cfg.OllamaURL,
 		OllamaModel:     cfg.OllamaModel,
+		LLMProvider:     cfg.LLMProvider,
+		OllamaLLMModel:  cfg.OllamaLLMModel,
 	}
 	resolver := aiconfig.NewResolver(store, envDefaults)
 	src := &aiconfig.Sources{
@@ -203,7 +226,8 @@ func main() {
 		ClusterThreshold: cfg.ClusterThreshold,
 	}).
 		WithAgentGeneration(store).
-		WithWeakSignalImprovement(cfg.TeamID).
+		WithWeakSignalImprovement().
+		WithAutoTagBackfill().
 		WithLivePublish(liveHub)
 
 	p.Start(ctx)

@@ -11,9 +11,11 @@ import (
 )
 
 func (s *SQLiteStore) UpsertAgent(ctx context.Context, a Agent) (string, error) {
-	// If no ID given, look up by domain so callers don't need to track IDs.
+	// If no ID given, look up by (domain, team_id) so callers don't need to track IDs.
+	// Each team owns its own agent per domain; different teams with the same domain
+	// are distinct rows.
 	if a.ID == "" {
-		existing, err := s.GetAgentByDomain(ctx, a.Domain)
+		existing, err := s.GetAgentByDomain(ctx, a.Domain, a.TeamID)
 		if err != nil {
 			return "", fmt.Errorf("lookup agent by domain: %w", err)
 		}
@@ -33,8 +35,8 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, a Agent) (string, error) 
 	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO agents (id, domain, version, status, system_prompt, instructions, anti_patterns, source_refs, cluster_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, domain, version, status, system_prompt, instructions, anti_patterns, source_refs, cluster_id, team_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			version       = excluded.version,
 			status        = excluded.status,
@@ -43,10 +45,11 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, a Agent) (string, error) 
 			anti_patterns = excluded.anti_patterns,
 			source_refs   = excluded.source_refs,
 			cluster_id    = excluded.cluster_id,
+			team_id       = excluded.team_id,
 			updated_at    = CURRENT_TIMESTAMP
 	`, a.ID, a.Domain, a.Version, string(a.Status),
 		a.SystemPrompt, a.Instructions, a.AntiPatterns,
-		string(refsJSON), a.ClusterID)
+		string(refsJSON), a.ClusterID, a.TeamID)
 	if err != nil {
 		return "", fmt.Errorf("upsert agent: %w", err)
 	}
@@ -56,7 +59,7 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, a Agent) (string, error) 
 func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,
-		       source_refs, cluster_id, created_at, updated_at
+		       source_refs, cluster_id, team_id, created_at, updated_at
 		FROM agents WHERE id = ?
 	`, id)
 	a, err := scanAgent(row)
@@ -69,13 +72,48 @@ func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	return a, nil
 }
 
-func (s *SQLiteStore) GetAgentByDomain(ctx context.Context, domain string) (*Agent, error) {
+// GetAgentByDomain implements the AgentStore lookup semantics documented on the
+// interface: team-scoped exact match first, legacy-row fallback, or unscoped
+// when teamID is empty (dev/single-tenant).
+func (s *SQLiteStore) GetAgentByDomain(ctx context.Context, domain, teamID string) (*Agent, error) {
+	if teamID == "" {
+		// Dev / single-tenant: return any matching agent.
+		row := s.db.QueryRowContext(ctx, `
+			SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,
+			       source_refs, cluster_id, team_id, created_at, updated_at
+			FROM agents WHERE domain = ?
+		`, domain)
+		a, err := scanAgent(row)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return a, nil
+	}
+
+	// Exact team match.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,
-		       source_refs, cluster_id, created_at, updated_at
-		FROM agents WHERE domain = ?
-	`, domain)
+		       source_refs, cluster_id, team_id, created_at, updated_at
+		FROM agents WHERE domain = ? AND team_id = ?
+	`, domain, teamID)
 	a, err := scanAgent(row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if a != nil {
+		return a, nil
+	}
+
+	// Legacy fallback: row created before per-team scoping (team_id='').
+	row = s.db.QueryRowContext(ctx, `
+		SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,
+		       source_refs, cluster_id, team_id, created_at, updated_at
+		FROM agents WHERE domain = ? AND team_id = ''
+	`, domain)
+	a, err = scanAgent(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -85,12 +123,18 @@ func (s *SQLiteStore) GetAgentByDomain(ctx context.Context, domain string) (*Age
 	return a, nil
 }
 
-func (s *SQLiteStore) ListAgents(ctx context.Context) ([]Agent, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *SQLiteStore) ListAgents(ctx context.Context, teamID string) ([]Agent, error) {
+	query := `
 		SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,
-		       source_refs, cluster_id, created_at, updated_at
-		FROM agents ORDER BY domain ASC
-	`)
+		       source_refs, cluster_id, team_id, created_at, updated_at
+		FROM agents`
+	var args []any
+	if teamID != "" {
+		query += " WHERE team_id = ?"
+		args = append(args, teamID)
+	}
+	query += " ORDER BY domain ASC"
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -166,7 +210,7 @@ func scanAgent(row rowScanner) (*Agent, error) {
 	var refsJSON, createdAt, updatedAt string
 	err := row.Scan(&a.ID, &a.Domain, &a.Version, &a.Status,
 		&a.SystemPrompt, &a.Instructions, &a.AntiPatterns,
-		&refsJSON, &a.ClusterID, &createdAt, &updatedAt)
+		&refsJSON, &a.ClusterID, &a.TeamID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}

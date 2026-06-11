@@ -42,7 +42,7 @@ func (m *mockAgentStore) GetAgent(_ context.Context, id string) (*storage.Agent,
 	return nil, nil
 }
 
-func (m *mockAgentStore) GetAgentByDomain(_ context.Context, domain string) (*storage.Agent, error) {
+func (m *mockAgentStore) GetAgentByDomain(_ context.Context, domain, _ string) (*storage.Agent, error) {
 	for _, a := range m.agents {
 		if a.Domain == domain {
 			return &a, nil
@@ -51,8 +51,17 @@ func (m *mockAgentStore) GetAgentByDomain(_ context.Context, domain string) (*st
 	return nil, nil
 }
 
-func (m *mockAgentStore) ListAgents(_ context.Context) ([]storage.Agent, error) {
-	return m.agents, nil
+func (m *mockAgentStore) ListAgents(_ context.Context, teamID string) ([]storage.Agent, error) {
+	if teamID == "" {
+		return m.agents, nil
+	}
+	var out []storage.Agent
+	for _, a := range m.agents {
+		if a.TeamID == teamID {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 func (m *mockAgentStore) PublishAgent(_ context.Context, id string) error {

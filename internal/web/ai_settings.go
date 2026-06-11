@@ -80,17 +80,21 @@ func (s *Server) resolveEffective(ctx context.Context, teamID string) (*aiconfig
 
 // buildAIBlock builds the "ai" block for the GET /api/settings response.
 // It returns nil when aiSrc is not configured.
-func (s *Server) buildAIBlock(ctx context.Context, teamID string) map[string]aiFieldValue {
+func (s *Server) buildAIBlock(ctx context.Context, teamID string) map[string]any {
 	eff, err := s.resolveEffective(ctx, teamID)
 	if err != nil || eff == nil {
 		return nil
 	}
-	return map[string]aiFieldValue{
+	return map[string]any{
 		"anthropic_api_key": maskKeyFieldValue(eff.AnthropicAPIKey),
 		"anthropic_model":   plainFieldValue(eff.AnthropicModel),
 		"agent_model":       plainFieldValue(eff.AgentModel),
 		"ollama_url":        plainFieldValue(eff.OllamaURL),
 		"ollama_model":      plainFieldValue(eff.OllamaModel),
+		"llm_provider":      plainFieldValue(eff.LLMProvider),
+		"ollama_llm_model":  plainFieldValue(eff.OllamaLLMModel),
+		// ai_touchpoints is a plain map — no FieldValue wrapper, no env layer.
+		"ai_touchpoints": eff.AITouchpoints,
 	}
 }
 
@@ -103,9 +107,16 @@ func (s *Server) buildAIBlock(ctx context.Context, teamID string) map[string]aiF
 // must never enter the response map even transiently. Callers are responsible
 // for setting the masked value explicitly via resp["anthropic_api_key"] = maskedKey
 // after calling this function.
-func buildSettingsResponse(settings *storage.TeamSettings, aiBlock map[string]aiFieldValue) map[string]any {
+func buildSettingsResponse(settings *storage.TeamSettings, aiBlock map[string]any) map[string]any {
 	// Replicate the CURRENT wire format.  Tagged fields keep their json tag
 	// names; untagged fields marshal as their Go identifier (PascalCase).
+	//
+	// ai_touchpoints is included as a plain map (no FieldValue wrapper — there is
+	// no env layer for touchpoints) so the UI can hydrate the picker state.
+	touchpoints := settings.AITouchpoints
+	if touchpoints == nil {
+		touchpoints = map[string]storage.AITouchpoint{}
+	}
 	m := map[string]any{
 		// Untagged fields — marshalled by encoding/json as their Go name.
 		"TeamID":             settings.TeamID,
@@ -116,9 +127,13 @@ func buildSettingsResponse(settings *storage.TeamSettings, aiBlock map[string]ai
 		"UpdatedAt":          settings.UpdatedAt,
 		// Tagged fields — use the json struct tag value.
 		// anthropic_api_key is omitted here; callers must set the masked value explicitly.
-		"anthropic_model": settings.AnthropicModel,
-		"ollama_url":      settings.OllamaURL,
-		"ollama_model":    settings.OllamaModel,
+		"anthropic_model":  settings.AnthropicModel,
+		"ollama_url":       settings.OllamaURL,
+		"ollama_model":     settings.OllamaModel,
+		"llm_provider":     settings.LLMProvider,
+		"ollama_llm_model": settings.OllamaLLMModel,
+		// ai_touchpoints: plain map for UI hydration (no env layer).
+		"ai_touchpoints": touchpoints,
 	}
 	if aiBlock != nil {
 		m["ai"] = aiBlock
@@ -308,6 +323,8 @@ func (s *Server) handleImportEnv(w http.ResponseWriter, r *http.Request) {
 		"agent_model":       true,
 		"ollama_url":        true,
 		"ollama_model":      true,
+		"llm_provider":      true,
+		"ollama_llm_model":  true,
 	}
 	for _, f := range body.Fields {
 		if !validFields[f] {
@@ -359,6 +376,14 @@ func (s *Server) handleImportEnv(w http.ResponseWriter, r *http.Request) {
 			if eff.OllamaModel.Env != "" {
 				settings.OllamaModel = eff.OllamaModel.Env
 			}
+		case "llm_provider":
+			if eff.LLMProvider.Env != "" {
+				settings.LLMProvider = eff.LLMProvider.Env
+			}
+		case "ollama_llm_model":
+			if eff.OllamaLLMModel.Env != "" {
+				settings.OllamaLLMModel = eff.OllamaLLMModel.Env
+			}
 		}
 	}
 
@@ -390,12 +415,15 @@ func (s *Server) handleImportEnv(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("resolve config after save: %v", err))
 		return
 	}
-	aiBlock := map[string]aiFieldValue{
+	aiBlock := map[string]any{
 		"anthropic_api_key": maskKeyFieldValue(newEff.AnthropicAPIKey),
 		"anthropic_model":   plainFieldValue(newEff.AnthropicModel),
 		"agent_model":       plainFieldValue(newEff.AgentModel),
 		"ollama_url":        plainFieldValue(newEff.OllamaURL),
 		"ollama_model":      plainFieldValue(newEff.OllamaModel),
+		"llm_provider":      plainFieldValue(newEff.LLMProvider),
+		"ollama_llm_model":  plainFieldValue(newEff.OllamaLLMModel),
+		"ai_touchpoints":    newEff.AITouchpoints,
 	}
 	writeJSON(w, map[string]any{"ai": aiBlock})
 }

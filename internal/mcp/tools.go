@@ -8,8 +8,10 @@ import (
 	"fmt"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
+	"github.com/dsandor/memory/internal/tags"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -51,7 +53,8 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 		description := req.GetString("description", "")
 		author := req.GetString("author", "")
 		team := req.GetString("team", "")
-		tags := tagsFromArgs(req.GetArguments(), "tags")
+		explicitTags := tagsFromArgs(req.GetArguments(), "tags")
+		entryTags := tags.Merge(explicitTags, tags.ExtractHashtags(title+" "+content))
 
 		if req.GetBool("dry_run", false) {
 			preview := map[string]any{
@@ -63,12 +66,16 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 				"description":  description,
 				"author":       author,
 				"team":         team,
-				"tags":         tags,
+				"tags":         entryTags,
 				"content_hash": hash,
 			}
 			out, _ := json.Marshal(preview)
 			return mcplib.NewToolResultText(string(out)), nil
 		}
+
+		// Resolve actor/team once; reused for the entry literal, embedder call,
+		// and the live event so we never call resolveActorTeam twice.
+		teamID, actor := resolveActorTeam(ctx)
 
 		entry := storage.KnowledgeEntry{
 			Type:        storage.KnowledgeType(entryType),
@@ -78,12 +85,9 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 			Domain:      domain,
 			Author:      author,
 			Team:        team,
-			Tags:        tags,
+			TeamID:      teamID,
+			Tags:        entryTags,
 		}
-
-		// Resolve actor/team once; reused for both the embedder call and the
-		// live event so we never call resolveActorTeam twice.
-		teamID, actor := resolveActorTeam(ctx)
 
 		// Resolve embedder per call so saved team settings take effect immediately.
 		embedder := src.Embedder(ctx, teamID)
@@ -99,6 +103,13 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 		}
+
+		// Fire-and-forget auto-categorization; never blocks the tool response.
+		// src is always non-nil here — the embedder resolution above already
+		// dereferenced it.
+		entry.ID = id
+		tagger := &tags.AutoTagger{Store: store, LLMFor: src.ImprovementLLM}
+		tagger.TagEntryAsync(ctx, entry, teamID)
 
 		// Best-effort live event — must not affect the tool response or panic
 		// when eventBus is nil (publishEvent is nil-safe).
@@ -122,6 +133,21 @@ func contentHash(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// fetchEntryForCaller fetches an entry by id and enforces team access for the
+// caller. The second return is a non-nil tool error result when the entry is
+// missing or belongs to another team; callers must return it as-is.
+func fetchEntryForCaller(ctx context.Context, store storage.Store, id string) (*storage.KnowledgeEntry, *mcplib.CallToolResult) {
+	entry, err := store.GetEntry(ctx, id)
+	if err != nil {
+		return nil, mcplib.NewToolResultError(fmt.Sprintf("entry not found: %v", err))
+	}
+	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, entry.TeamID) {
+		return nil, mcplib.NewToolResultError("forbidden: entry belongs to another team")
+	}
+	return entry, nil
+}
+
 func HandleKnowledgeGet(store storage.Store) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		id := req.GetString("id", "")
@@ -129,9 +155,9 @@ func HandleKnowledgeGet(store storage.Store) func(context.Context, mcplib.CallTo
 			return mcplib.NewToolResultError("id is required"), nil
 		}
 
-		entry, err := store.GetEntry(ctx, id)
-		if err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("entry not found: %v", err)), nil
+		entry, errResult := fetchEntryForCaller(ctx, store, id)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		data, _ := json.Marshal(entry)
@@ -141,10 +167,12 @@ func HandleKnowledgeGet(store storage.Store) func(context.Context, mcplib.CallTo
 
 func HandleKnowledgeList(store storage.Store) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		teamID, _ := resolveActorTeam(ctx)
 		filter := storage.ListFilter{
 			Domain: req.GetString("domain", ""),
 			Type:   storage.KnowledgeType(req.GetString("type", "")),
 			Limit:  req.GetInt("limit", 20),
+			TeamID: teamID,
 		}
 
 		entries, err := store.ListEntries(ctx, filter)
@@ -164,6 +192,10 @@ func HandleKnowledgeDelete(store storage.Store) func(context.Context, mcplib.Cal
 			return mcplib.NewToolResultError("id is required"), nil
 		}
 
+		if _, errResult := fetchEntryForCaller(ctx, store, id); errResult != nil {
+			return errResult, nil
+		}
+
 		if err := store.DeleteEntry(ctx, id); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
 		}
@@ -177,11 +209,11 @@ func tagsFromArgs(args map[string]any, key string) []string {
 	if !ok {
 		return []string{}
 	}
-	tags := make([]string, 0, len(raw))
+	out := make([]string, 0, len(raw))
 	for _, v := range raw {
 		if s, ok := v.(string); ok {
-			tags = append(tags, s)
+			out = append(out, s)
 		}
 	}
-	return tags
+	return out
 }

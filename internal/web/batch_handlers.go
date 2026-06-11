@@ -34,7 +34,7 @@ func (s *Server) handleBatchApprove(w http.ResponseWriter, r *http.Request) {
 		// Resolve the entry first and verify it belongs to the caller's team
 		// before mutating — prevents IDOR cross-tenant approval.
 		e, err := s.store.GetEntry(ctx, id)
-		if err != nil || e == nil || e.TeamID != tc.TeamID {
+		if err != nil || e == nil || !auth.CanAccess(tc, e.TeamID) {
 			errs = append(errs, fmt.Sprintf("%s: not found", id))
 			continue
 		}
@@ -100,7 +100,7 @@ func (s *Server) handleBatchReject(w http.ResponseWriter, r *http.Request) {
 		// Resolve the entry first and verify it belongs to the caller's team
 		// before mutating — prevents IDOR cross-tenant rejection.
 		e, err := s.store.GetEntry(ctx, id)
-		if err != nil || e == nil || e.TeamID != tc.TeamID {
+		if err != nil || e == nil || !auth.CanAccess(tc, e.TeamID) {
 			errs = append(errs, fmt.Sprintf("%s: not found", id))
 			continue
 		}

@@ -6,6 +6,7 @@ import {
   importEnvSettings,
   type AISettings,
   type AIFieldValue,
+  type AITouchpoint,
   type ModelOption,
   type ModelOptions,
 } from '../lib/api';
@@ -21,6 +22,11 @@ import Snackbar from '@mui/material/Snackbar';
 import Divider from '@mui/material/Divider';
 import Chip from '@mui/material/Chip';
 import Autocomplete from '@mui/material/Autocomplete';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import InputLabel from '@mui/material/InputLabel';
+import FormControl from '@mui/material/FormControl';
+import FormHelperText from '@mui/material/FormHelperText';
 
 interface TeamSettings {
   team_id?: string;
@@ -32,6 +38,9 @@ interface TeamSettings {
   anthropic_model?: string;
   ollama_url?: string;
   ollama_model?: string;
+  llm_provider?: string;
+  ollama_llm_model?: string;
+  ai_touchpoints?: Record<string, AITouchpoint>;
   ai?: AISettings;
 }
 
@@ -209,16 +218,20 @@ export default function Settings() {
     setAi(newAi);
 
     // Also update the editable saved-value inputs to reflect what was imported.
-    const fieldValue = newAi[fieldName as keyof AISettings];
-    if (fieldName === 'anthropic_api_key') {
-      // Key is masked; if effective is now set, treat as stored.
-      if (fieldValue.effective !== '') {
-        setHasStoredKey(true);
-        setKeyDraft('');
+    // ai_touchpoints is not an AIFieldValue and is never passed to handleImportEnv,
+    // so cast through AIFieldValue after guarding for undefined.
+    const fieldValue = newAi[fieldName as keyof AISettings] as AIFieldValue | undefined;
+    if (fieldValue !== undefined) {
+      if (fieldName === 'anthropic_api_key') {
+        // Key is masked; if effective is now set, treat as stored.
+        if (fieldValue.effective !== '') {
+          setHasStoredKey(true);
+          setKeyDraft('');
+        }
+      } else {
+        const importedValue = fieldValue.saved;
+        setSettings(s => ({ ...s, [fieldName]: importedValue }));
       }
-    } else {
-      const importedValue = fieldValue.saved;
-      setSettings(s => ({ ...s, [fieldName]: importedValue }));
     }
 
     // Re-fetch model options when the key or ollama URL changes — the available
@@ -306,6 +319,29 @@ export default function Settings() {
             These settings override the server-level environment variables for this team.
             Leave a field blank to inherit the server default.
           </Typography>
+
+          <Divider />
+
+          {/* ── LLM Provider ── */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <FormControl fullWidth>
+              <InputLabel id="llm-provider-label">LLM Provider</InputLabel>
+              <Select
+                labelId="llm-provider-label"
+                label="LLM Provider"
+                value={settings.llm_provider ?? ''}
+                onChange={e => setSettings(s => ({ ...s, llm_provider: e.target.value }))}
+              >
+                <MenuItem value="">Anthropic (default)</MenuItem>
+                <MenuItem value="anthropic">Anthropic</MenuItem>
+                <MenuItem value="ollama">Ollama (local)</MenuItem>
+              </Select>
+              <FormHelperText>
+                Selects which LLM backend is used for chat and completion tasks. Defaults to Anthropic when unset.
+              </FormHelperText>
+            </FormControl>
+            {ai && <EffectiveLine field={{ ...ai.llm_provider, effective: ai.llm_provider.effective === '' ? 'anthropic (default)' : ai.llm_provider.effective }} />}
+          </Box>
 
           <Divider />
 
@@ -452,6 +488,47 @@ export default function Settings() {
             )}
           </Box>
 
+          {/* Ollama LLM Model */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Autocomplete
+              freeSolo
+              options={models.ollama}
+              getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.label}
+              value={models.ollama.find(m => m.id === (settings.ollama_llm_model ?? '')) ?? (settings.ollama_llm_model ?? '')}
+              onChange={(_e, val) => {
+                setSettings(s => ({ ...s, ollama_llm_model: resolveAutocompleteValue(val as string | ModelOption | null) }));
+              }}
+              onInputChange={(_e, val, reason) => {
+                if (reason === 'input') {
+                  setSettings(s => ({ ...s, ollama_llm_model: val }));
+                }
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Ollama Chat Model"
+                  fullWidth
+                  placeholder="llama3"
+                  helperText={
+                    models.ollama_source === 'unavailable'
+                      ? 'Used when provider is Ollama; separate from the embedding model. (Ollama not reachable — type a model name)'
+                      : 'Used when provider is Ollama; separate from the embedding model.'
+                  }
+                />
+              )}
+            />
+            {ai && (
+              <>
+                <EffectiveLine field={ai.ollama_llm_model} />
+                <ImportEnvButton
+                  fieldName="ollama_llm_model"
+                  field={ai.ollama_llm_model}
+                  onImport={handleImportEnv}
+                />
+              </>
+            )}
+          </Box>
+
           <Divider />
 
           {/* ── Agent ── */}
@@ -494,6 +571,111 @@ export default function Settings() {
               </>
             )}
           </Box>
+
+          <Divider />
+
+          {/* ── AI Touchpoints ── */}
+          <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'text.secondary' }}>
+            AI Touchpoints
+          </Typography>
+
+          <Typography variant="body2" color="text.secondary">
+            Override the team default per AI usage. Unset rows inherit the default provider above.
+          </Typography>
+
+          {(
+            [
+              { key: 'analysis',    label: 'Analysis (summaries, scoring, gaps)' },
+              { key: 'agents',      label: 'Agent generation & refactor' },
+              { key: 'improvement', label: 'Improvement & auto-tagging' },
+              { key: 'enrichment',  label: 'Prompt enrichment (enrich_context, prompt_suggest)' },
+            ] as const
+          ).map(({ key, label }) => {
+            const tp = settings.ai_touchpoints?.[key];
+            const selectedProvider = tp?.provider ?? '';
+            const selectedModel = tp?.model ?? '';
+
+            const modelOptions: ModelOption[] =
+              selectedProvider === 'anthropic' ? models.anthropic :
+              selectedProvider === 'ollama'    ? models.ollama :
+              [];
+
+            const handleProviderChange = (newProvider: string) => {
+              setSettings(s => {
+                const current = { ...(s.ai_touchpoints ?? {}) };
+                if (newProvider === '') {
+                  delete current[key];
+                } else {
+                  current[key] = { provider: newProvider, model: '' };
+                }
+                return { ...s, ai_touchpoints: current };
+              });
+            };
+
+            const handleModelChange = (newModel: string) => {
+              setSettings(s => {
+                const current = { ...(s.ai_touchpoints ?? {}) };
+                current[key] = { provider: selectedProvider, model: newModel };
+                return { ...s, ai_touchpoints: current };
+              });
+            };
+
+            return (
+              <Box key={key} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>{label}</Typography>
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+                  <FormControl sx={{ minWidth: 180 }}>
+                    <InputLabel id={`tp-provider-label-${key}`}>Provider</InputLabel>
+                    <Select
+                      labelId={`tp-provider-label-${key}`}
+                      label="Provider"
+                      value={selectedProvider}
+                      onChange={e => handleProviderChange(e.target.value)}
+                    >
+                      <MenuItem value="">Default</MenuItem>
+                      <MenuItem value="anthropic">Anthropic</MenuItem>
+                      <MenuItem value="ollama">Ollama (local)</MenuItem>
+                    </Select>
+                    <FormHelperText>Inherits team default when unset.</FormHelperText>
+                  </FormControl>
+
+                  <Box sx={{ flex: 1 }}>
+                    <Autocomplete
+                      freeSolo
+                      disabled={selectedProvider === ''}
+                      options={modelOptions}
+                      getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.label}
+                      value={
+                        modelOptions.find(m => m.id === selectedModel) ?? selectedModel
+                      }
+                      onChange={(_e, val) => {
+                        handleModelChange(resolveAutocompleteValue(val as string | ModelOption | null));
+                      }}
+                      onInputChange={(_e, val, reason) => {
+                        if (reason === 'input') {
+                          handleModelChange(val);
+                        }
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="Model"
+                          fullWidth
+                          helperText={
+                            selectedProvider === ''
+                              ? 'Select a provider to choose a model.'
+                              : selectedProvider === 'ollama' && models.ollama_source === 'unavailable'
+                                ? 'Ollama not reachable — type a model name.'
+                                : 'Leave blank to use the provider default for this touchpoint.'
+                          }
+                        />
+                      )}
+                    />
+                  </Box>
+                </Box>
+              </Box>
+            );
+          })}
         </CardContent>
       </Card>
 

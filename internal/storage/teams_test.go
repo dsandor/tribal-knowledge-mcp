@@ -262,6 +262,96 @@ func TestTeamSettings(t *testing.T) {
 	}
 }
 
+func TestTeamSettingsAITouchpointsRoundTrip(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+	teamID, _ := s.CreateTeam(ctx, Team{Name: "touchpoints-test", Enabled: true})
+
+	// Round-trip with a non-empty touchpoints map.
+	settings := TeamSettings{
+		TeamID:             teamID,
+		Domains:            []string{},
+		ClusterThreshold:   0.85,
+		PipelineMinEntries: 10,
+		AgentModel:         "claude-haiku-4-5-20251001",
+		AITouchpoints: map[string]AITouchpoint{
+			"analysis": {Provider: "ollama", Model: "llama3.1"},
+		},
+	}
+	if err := s.PutTeamSettings(ctx, settings); err != nil {
+		t.Fatalf("PutTeamSettings: %v", err)
+	}
+	got, err := s.GetTeamSettings(ctx, teamID)
+	if err != nil {
+		t.Fatalf("GetTeamSettings: %v", err)
+	}
+	if got.AITouchpoints == nil {
+		t.Fatal("AITouchpoints should not be nil")
+	}
+	tp, ok := got.AITouchpoints["analysis"]
+	if !ok {
+		t.Fatalf("AITouchpoints[analysis] not found; got: %v", got.AITouchpoints)
+	}
+	if tp.Provider != "ollama" {
+		t.Errorf("Provider = %q, want ollama", tp.Provider)
+	}
+	if tp.Model != "llama3.1" {
+		t.Errorf("Model = %q, want llama3.1", tp.Model)
+	}
+
+	// Put with nil map → Get returns non-nil empty map.
+	settings2 := TeamSettings{
+		TeamID:             teamID,
+		Domains:            []string{},
+		ClusterThreshold:   0.85,
+		PipelineMinEntries: 10,
+		AgentModel:         "claude-haiku-4-5-20251001",
+		AITouchpoints:      nil,
+	}
+	if err := s.PutTeamSettings(ctx, settings2); err != nil {
+		t.Fatalf("PutTeamSettings (nil map): %v", err)
+	}
+	got2, err := s.GetTeamSettings(ctx, teamID)
+	if err != nil {
+		t.Fatalf("GetTeamSettings (nil map): %v", err)
+	}
+	if got2.AITouchpoints == nil {
+		t.Error("AITouchpoints should be non-nil (empty map) after nil Put")
+	}
+	if len(got2.AITouchpoints) != 0 {
+		t.Errorf("AITouchpoints should be empty map, got: %v", got2.AITouchpoints)
+	}
+}
+
+func TestTeamSettingsLLMProviderRoundTrip(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+	teamID, _ := s.CreateTeam(ctx, Team{Name: "llm-test", Enabled: true})
+
+	settings := TeamSettings{
+		TeamID:             teamID,
+		Domains:            []string{},
+		ClusterThreshold:   0.85,
+		PipelineMinEntries: 10,
+		AgentModel:         "claude-haiku-4-5-20251001",
+		LLMProvider:        "ollama",
+		OllamaLLMModel:     "llama3.1",
+	}
+	if err := s.PutTeamSettings(ctx, settings); err != nil {
+		t.Fatalf("PutTeamSettings: %v", err)
+	}
+	got, err := s.GetTeamSettings(ctx, teamID)
+	if err != nil {
+		t.Fatalf("GetTeamSettings: %v", err)
+	}
+	if got.LLMProvider != "ollama" {
+		t.Errorf("LLMProvider = %q, want ollama", got.LLMProvider)
+	}
+	if got.OllamaLLMModel != "llama3.1" {
+		t.Errorf("OllamaLLMModel = %q, want llama3.1", got.OllamaLLMModel)
+	}
+}
+
 func TestAuthConfig(t *testing.T) {
 	s := newTestStoreInternal(t)
 	ctx := context.Background()

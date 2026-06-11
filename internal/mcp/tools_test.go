@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/dsandor/memory/internal/aiconfig"
-	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/embedding"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/llm"
+	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -77,13 +77,14 @@ func (m *mockStore) SearchSimilar(_ context.Context, _ []float32, topK int) ([]s
 	return results, nil
 }
 
-func (m *mockStore) Close() error                                                  { return nil }
-func (m *mockStore) RateEntry(_ context.Context, _ string, _ float64) error        { return nil }
-func (m *mockStore) ApproveEntry(_ context.Context, _ string) error                { return nil }
-func (m *mockStore) RejectEntry(_ context.Context, _ string) error                 { return nil }
-func (m *mockStore) UpdateEntry(_ context.Context, _ storage.KnowledgeEntry) error { return nil }
-func (m *mockStore) Ping(_ context.Context) error                                  { return nil }
-func (m *mockStore) RecordUsage(_ context.Context, _ storage.UsageEvent) error     { return nil }
+func (m *mockStore) Close() error                                                   { return nil }
+func (m *mockStore) RateEntry(_ context.Context, _ string, _ float64) error         { return nil }
+func (m *mockStore) ApproveEntry(_ context.Context, _ string) error                 { return nil }
+func (m *mockStore) RejectEntry(_ context.Context, _ string) error                  { return nil }
+func (m *mockStore) UpdateEntry(_ context.Context, _ storage.KnowledgeEntry) error  { return nil }
+func (m *mockStore) UpdateAutoTags(_ context.Context, _ string, _ []string) error   { return nil }
+func (m *mockStore) Ping(_ context.Context) error                                   { return nil }
+func (m *mockStore) RecordUsage(_ context.Context, _ storage.UsageEvent) error      { return nil }
 func (m *mockStore) RecordOutcome(_ context.Context, _ storage.OutcomeRating) error { return nil }
 func (m *mockStore) GetTrendingEntries(_ context.Context, _ string, _, _ int) ([]storage.TrendingEntry, error) {
 	return nil, nil
@@ -104,6 +105,7 @@ func (m *mockStore) BulkImport(_ context.Context, _ []storage.KnowledgeEntry) (i
 func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
 	return nil, nil
 }
+func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
 
 // --- mock Embedder ---
 
@@ -127,6 +129,7 @@ func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder { return f.
 type fakeLLMProvider struct{ c llm.Client }
 
 func (f *fakeLLMProvider) Client(_, _ string) llm.Client { return f.c }
+func (f *fakeLLMProvider) Ollama(_, _ string) llm.Client { return f.c }
 
 // fakeSettingsStore returns empty settings (no saved overrides).
 type fakeSettingsStore struct{}
@@ -228,8 +231,8 @@ func TestHandleKnowledgeStore_Success(t *testing.T) {
 	if store.entries[0].Domain != "general" {
 		t.Errorf("domain: got %q, want general", store.entries[0].Domain)
 	}
-	if len(store.entries[0].Tags) != 2 {
-		t.Errorf("tags: got %v, want 2", store.entries[0].Tags)
+	if got := store.entries[0].Tags; len(got) != 2 || got[0] != "clarity" || got[1] != "bullets" {
+		t.Errorf("tags: got %v, want [clarity bullets]", got)
 	}
 	// Response text should include the assigned ID
 	responseText := textContent(result)
@@ -414,6 +417,41 @@ func TestHandleKnowledgeStore_NilBus_NoPanic(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+}
+
+func TestKnowledgeStoreExtractsHashtags(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	handler := internalmcp.HandleKnowledgeStore(store, newTestSources(embedder, nil))
+	req := callReq(
+		"title", "Earnings workflow",
+		"content", "Always check #earnings and #q3-report first",
+		"type", "workflow",
+		"tags", []any{"manual-tag", "earnings"},
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+	if len(store.entries) != 1 {
+		t.Fatalf("expected 1 stored entry, got %d", len(store.entries))
+	}
+
+	got := store.entries[0].Tags
+	want := []string{"manual-tag", "earnings", "q3-report"}
+	if len(got) != len(want) {
+		t.Fatalf("tags: got %v (len %d), want %v (len %d)", got, len(got), want, len(want))
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("tags[%d]: got %q, want %q", i, got[i], w)
+		}
 	}
 }
 

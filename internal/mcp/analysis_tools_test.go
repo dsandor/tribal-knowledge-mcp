@@ -20,41 +20,50 @@ type mockAnalysisStore struct {
 	snapshot *storage.DatasetSnapshot
 }
 
-func (m *mockAnalysisStore) CountEntries(_ context.Context) (int, error) { return 0, nil }
-func (m *mockAnalysisStore) GetAllEmbeddings(_ context.Context) (map[string][]float32, error) {
+func (m *mockAnalysisStore) CountEntries(_ context.Context, _ string) (int, error) { return 0, nil }
+func (m *mockAnalysisStore) GetAllEmbeddings(_ context.Context, _ string) (map[string][]float32, error) {
 	return nil, nil
 }
-func (m *mockAnalysisStore) ListClusters(_ context.Context) ([]storage.Cluster, error) {
+func (m *mockAnalysisStore) ListTeams(_ context.Context) ([]storage.Team, error) { return nil, nil }
+func (m *mockAnalysisStore) ListClusters(_ context.Context, _ string) ([]storage.Cluster, error) {
 	return m.clusters, nil
 }
 func (m *mockAnalysisStore) StoreCluster(_ context.Context, _ storage.Cluster) (string, error) {
 	return "id", nil
 }
 func (m *mockAnalysisStore) DeleteClustersByRunID(_ context.Context, _ string) error { return nil }
-func (m *mockAnalysisStore) StartPipelineRun(_ context.Context, _ string) (string, error) {
+func (m *mockAnalysisStore) StartPipelineRun(_ context.Context, _, _ string) (string, error) {
 	return "id", nil
 }
 func (m *mockAnalysisStore) FinishPipelineRun(_ context.Context, _, _ string, _, _ int, _ []string) error {
 	return nil
 }
-func (m *mockAnalysisStore) GetLatestPipelineRun(_ context.Context) (*storage.PipelineRun, error) {
+func (m *mockAnalysisStore) GetLatestPipelineRun(_ context.Context, _ string) (*storage.PipelineRun, error) {
 	return m.run, nil
 }
 func (m *mockAnalysisStore) StoreSnapshot(_ context.Context, _ storage.DatasetSnapshot) (string, error) {
 	return "id", nil
 }
-func (m *mockAnalysisStore) GetLatestSnapshot(_ context.Context) (*storage.DatasetSnapshot, error) {
+func (m *mockAnalysisStore) GetLatestSnapshot(_ context.Context, _ string) (*storage.DatasetSnapshot, error) {
 	return m.snapshot, nil
 }
-func (m *mockAnalysisStore) ListSnapshots(_ context.Context) ([]storage.DatasetSnapshot, error) {
+func (m *mockAnalysisStore) ListSnapshots(_ context.Context, _ string) ([]storage.DatasetSnapshot, error) {
 	return nil, nil
 }
 func (m *mockAnalysisStore) RateEntry(_ context.Context, _ string, _ float64) error { return nil }
 func (m *mockAnalysisStore) GetEntryByContentHash(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
 	return nil, nil
 }
-func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, _ int) ([]storage.PipelineRun, error) {
+func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, _ string, _ int) ([]storage.PipelineRun, error) {
 	return nil, nil
+}
+func (m *mockAnalysisStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
+func (m *mockAnalysisStore) GetAnalysisCache(_ context.Context, _, _ string) (string, bool, error) {
+	return "", false, nil
+}
+func (m *mockAnalysisStore) PutAnalysisCache(_ context.Context, _, _, _, _ string) error { return nil }
+func (m *mockAnalysisStore) PruneAnalysisCache(_ context.Context, _ time.Duration) (int, error) {
+	return 0, nil
 }
 
 func TestHandleClusterList_ReturnsClusters(t *testing.T) {

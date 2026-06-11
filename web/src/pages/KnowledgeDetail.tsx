@@ -25,6 +25,7 @@ import Select from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import { TagPill } from '@/components/ui/tag-pill'
 
 const KNOWLEDGE_TYPES = [
   'prompt_template',
@@ -217,6 +218,19 @@ export default function KnowledgeDetail() {
                 placeholder="tag1, tag2, tag3"
               />
 
+              {entry.AutoTags && entry.AutoTags.length > 0 && (
+                <Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    Auto-categorized (read-only)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                    {entry.AutoTags.map(t => (
+                      <TagPill key={`auto-${t}`} label={t} variant="auto" />
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
               <TextField
                 label="Description"
                 fullWidth
@@ -292,7 +306,10 @@ export default function KnowledgeDetail() {
           <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>{entry.Author}</Typography>
         )}
         {entry.Tags?.map(t => (
-          <Chip key={t} label={`#${t}`} size="small" variant="outlined" />
+          <TagPill key={t} label={t} variant="user" />
+        ))}
+        {entry.AutoTags?.map(t => (
+          <TagPill key={`auto-${t}`} label={t} variant="auto" />
         ))}
         <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
           {new Date(entry.CreatedAt).toLocaleDateString()}

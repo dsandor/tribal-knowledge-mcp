@@ -53,13 +53,18 @@ func (s *PostgresStore) BulkImport(ctx context.Context, entries []KnowledgeEntry
 			errs = append(errs, fmt.Sprintf("entry[%d] %q: marshal tags: %v", i, titleTrimmed, jsonErr))
 			continue
 		}
+		autoTagsJSON, jsonErr := json.Marshal(entry.AutoTags)
+		if jsonErr != nil {
+			errs = append(errs, fmt.Sprintf("entry[%d] %q: marshal auto tags: %v", i, titleTrimmed, jsonErr))
+			continue
+		}
 
 		_, insErr := tx.ExecContext(ctx, `
-			INSERT INTO entries (id, type, title, content, description, domain, tags, author, team, team_id, status)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			INSERT INTO entries (id, type, title, content, description, domain, tags, auto_tags, author, team, team_id, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT DO NOTHING
 		`, entry.ID, string(entry.Type), titleTrimmed, entry.Content,
-			entry.Description, entry.Domain, string(tagsJSON),
+			entry.Description, entry.Domain, string(tagsJSON), string(autoTagsJSON),
 			entry.Author, entry.Team, entry.TeamID, entry.Status,
 		)
 		if insErr != nil {

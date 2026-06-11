@@ -34,6 +34,7 @@ func (s *Server) handleKnowledgeExport(w http.ResponseWriter, r *http.Request) {
 		TeamID: tc.TeamID,
 		Domain: q.Get("domain"),
 		Type:   storage.KnowledgeType(q.Get("type")),
+		Tag:    q.Get("tag"),
 		Limit:  10000,
 	}
 
@@ -41,21 +42,6 @@ func (s *Server) handleKnowledgeExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list entries: %v", err))
 		return
-	}
-
-	// Apply tag filter post-fetch (ListFilter has no tag field)
-	tagFilter := q.Get("tag")
-	if tagFilter != "" {
-		filtered := entries[:0]
-		for _, e := range entries {
-			for _, t := range e.Tags {
-				if t == tagFilter {
-					filtered = append(filtered, e)
-					break
-				}
-			}
-		}
-		entries = filtered
 	}
 
 	if entries == nil {
@@ -72,9 +58,10 @@ func (s *Server) handleKnowledgeExport(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", `attachment; filename="knowledge-export.csv"`)
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"id", "title", "type", "domain", "tags", "content", "status", "quality_score", "created_at"})
+		_ = cw.Write([]string{"id", "title", "type", "domain", "tags", "auto_tags", "content", "status", "quality_score", "created_at"})
 		for _, e := range entries {
 			tagsStr := strings.Join(e.Tags, "|")
+			autoTagsStr := strings.Join(e.AutoTags, "|")
 			// Replace embedded newlines with literal \n so each entry stays on one CSV row
 			content := strings.ReplaceAll(e.Content, "\n", `\n`)
 			content = strings.ReplaceAll(content, "\r", ``)
@@ -84,6 +71,7 @@ func (s *Server) handleKnowledgeExport(w http.ResponseWriter, r *http.Request) {
 				string(e.Type),
 				csvSafeCell(e.Domain),
 				csvSafeCell(tagsStr),
+				csvSafeCell(autoTagsStr),
 				csvSafeCell(content),
 				csvSafeCell(e.Status),
 				fmt.Sprintf("%.4f", e.Rating),

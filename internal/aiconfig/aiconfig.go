@@ -29,6 +29,12 @@ type EffectiveConfig struct {
 	AgentModel      FieldValue `json:"agent_model"`
 	OllamaURL       FieldValue `json:"ollama_url"`
 	OllamaModel     FieldValue `json:"ollama_model"`
+	LLMProvider     FieldValue `json:"llm_provider"`
+	OllamaLLMModel  FieldValue `json:"ollama_llm_model"`
+	// AITouchpoints maps touchpoint name to per-touchpoint AI config.
+	// Valid keys: "analysis", "agents", "improvement", "enrichment".
+	// No env layer — only saved team settings populate this map.
+	AITouchpoints map[string]storage.AITouchpoint `json:"ai_touchpoints"`
 }
 
 // EnvDefaults carries the process-environment-derived defaults captured at
@@ -40,6 +46,8 @@ type EnvDefaults struct {
 	AgentModel      string
 	OllamaURL       string
 	OllamaModel     string
+	LLMProvider     string
+	OllamaLLMModel  string
 }
 
 // SettingsStore is the narrow storage interface required by the Resolver.
@@ -80,12 +88,20 @@ func (r *Resolver) Effective(ctx context.Context, teamID string) (*EffectiveConf
 		saved = *ts
 	}
 
+	touchpoints := saved.AITouchpoints
+	if touchpoints == nil {
+		touchpoints = map[string]storage.AITouchpoint{}
+	}
+
 	cfg := &EffectiveConfig{
 		AnthropicAPIKey: resolve(saved.AnthropicAPIKey, r.env.AnthropicAPIKey),
 		AnthropicModel:  resolve(saved.AnthropicModel, r.env.AnthropicModel),
 		AgentModel:      resolve(saved.AgentModel, r.env.AgentModel),
 		OllamaURL:       resolve(saved.OllamaURL, r.env.OllamaURL),
 		OllamaModel:     resolve(saved.OllamaModel, r.env.OllamaModel),
+		LLMProvider:     resolve(saved.LLMProvider, r.env.LLMProvider),
+		OllamaLLMModel:  resolve(saved.OllamaLLMModel, r.env.OllamaLLMModel),
+		AITouchpoints:   touchpoints,
 	}
 	return cfg, nil
 }

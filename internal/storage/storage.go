@@ -29,6 +29,7 @@ type KnowledgeEntry struct {
 	Description string
 	Domain      string
 	Tags        []string
+	AutoTags    []string // LLM-assigned category tags; never user-edited
 	Author      string
 	Team        string
 	CreatedAt   time.Time
@@ -41,8 +42,8 @@ type KnowledgeEntry struct {
 }
 
 type SearchResult struct {
-	Entry    KnowledgeEntry
-	Score    float64
+	Entry KnowledgeEntry
+	Score float64
 }
 
 type ListFilter struct {
@@ -54,6 +55,7 @@ type ListFilter struct {
 	Search string // substring match on Title or Content (case-insensitive); empty = no filter
 	Status string // filter by entry status; empty = no filter
 	TeamID string // filter by team_id; empty = no filter
+	Tag    string // exact-match against any user tag or auto tag; empty = no filter
 }
 
 type Cluster struct {
@@ -64,6 +66,7 @@ type Cluster struct {
 	EntryIDs      []string
 	QualityScore  float64
 	PipelineRunID string
+	TeamID        string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -75,6 +78,7 @@ type PipelineRun struct {
 	EntriesProcessed int
 	ClustersFound    int
 	Errors           []string
+	TeamID           string
 	StartedAt        time.Time
 	CompletedAt      *time.Time
 }
@@ -86,6 +90,7 @@ type DatasetSnapshot struct {
 	EntryCount    int
 	Data          string
 	PipelineRunID string
+	TeamID        string
 	CreatedAt     time.Time
 }
 
@@ -131,19 +136,33 @@ type ActivityEvent struct {
 // AnalysisStore extends Store with methods needed by the analysis pipeline.
 type AnalysisStore interface {
 	Store
-	CountEntries(ctx context.Context) (int, error)
-	GetAllEmbeddings(ctx context.Context) (map[string][]float32, error)
-	ListClusters(ctx context.Context) ([]Cluster, error)
+	CountEntries(ctx context.Context, teamID string) (int, error)
+	GetAllEmbeddings(ctx context.Context, teamID string) (map[string][]float32, error)
+	ListTeams(ctx context.Context) ([]Team, error)
+	ListClusters(ctx context.Context, teamID string) ([]Cluster, error)
 	StoreCluster(ctx context.Context, c Cluster) (string, error)
 	DeleteClustersByRunID(ctx context.Context, runID string) error
-	StartPipelineRun(ctx context.Context, trigger string) (string, error)
+	StartPipelineRun(ctx context.Context, trigger, teamID string) (string, error)
 	FinishPipelineRun(ctx context.Context, id, status string, entriesProcessed, clustersFound int, errs []string) error
-	GetLatestPipelineRun(ctx context.Context) (*PipelineRun, error)
-	ListPipelineRuns(ctx context.Context, limit int) ([]PipelineRun, error)
+	GetLatestPipelineRun(ctx context.Context, teamID string) (*PipelineRun, error)
+	ListPipelineRuns(ctx context.Context, teamID string, limit int) ([]PipelineRun, error)
 	StoreSnapshot(ctx context.Context, snap DatasetSnapshot) (string, error)
-	GetLatestSnapshot(ctx context.Context) (*DatasetSnapshot, error)
+	// GetLatestSnapshot returns the snapshot with the highest version for the given team
+	// (or globally when teamID is ""), or nil if none exist.
+	GetLatestSnapshot(ctx context.Context, teamID string) (*DatasetSnapshot, error)
 	// ListSnapshots returns all dataset snapshots ordered by version descending.
-	ListSnapshots(ctx context.Context) ([]DatasetSnapshot, error)
+	ListSnapshots(ctx context.Context, teamID string) ([]DatasetSnapshot, error)
+	// MarkInterruptedRuns marks every pipeline run still in status "running"
+	// as failed with an "interrupted by restart" error. Called at startup —
+	// only one process runs the pipeline, so any running row at boot is dead.
+	// Returns the number of runs marked.
+	MarkInterruptedRuns(ctx context.Context) (int, error)
+	// GetAnalysisCache returns the cached LLM result for (kind, key).
+	GetAnalysisCache(ctx context.Context, kind, key string) (value string, ok bool, err error)
+	// PutAnalysisCache upserts the cached LLM result for (kind, key).
+	PutAnalysisCache(ctx context.Context, kind, key, value, teamID string) error
+	// PruneAnalysisCache deletes cache rows older than olderThan. Returns rows deleted.
+	PruneAnalysisCache(ctx context.Context, olderThan time.Duration) (int, error)
 }
 
 type Store interface {
@@ -163,6 +182,13 @@ type Store interface {
 	RejectEntry(ctx context.Context, id string) error
 	// UpdateEntry updates the mutable fields of an existing entry (title, content, description, domain, tags).
 	UpdateEntry(ctx context.Context, entry KnowledgeEntry) error
+	// UpdateAutoTags replaces the auto-generated tags for an entry without
+	// touching user tags or bumping version. Returns ErrNotFound if missing.
+	UpdateAutoTags(ctx context.Context, id string, tags []string) error
+	// BackfillTeamID stamps teamID onto rows whose team_id is empty across
+	// entries, clusters, agents, agent_versions, dataset_snapshots, and
+	// pipeline_runs. Idempotent; used by single-team deployments at startup.
+	BackfillTeamID(ctx context.Context, teamID string) error
 	// Ping verifies the storage connection is alive. Returns nil on success.
 	Ping(ctx context.Context) error
 	Close() error

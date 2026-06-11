@@ -17,6 +17,7 @@ import (
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
+	tagspkg "github.com/dsandor/memory/internal/tags"
 )
 
 // publishLive publishes a live event to the hub if one is configured.
@@ -51,23 +52,24 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	tc := auth.GetTeamContext(ctx)
 
-	count, err := s.store.CountEntries(ctx)
+	count, err := s.store.CountEntries(ctx, tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("count entries: %v", err))
 		return
 	}
-	clusters, err := s.store.ListClusters(ctx)
+	clusters, err := s.store.ListClusters(ctx, tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
 	}
-	agents, err := s.store.ListAgents(ctx)
+	agents, err := s.store.ListAgents(ctx, tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
 		return
 	}
-	run, err := s.store.GetLatestPipelineRun(ctx)
+	run, err := s.store.GetLatestPipelineRun(ctx, tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
 		return
@@ -88,6 +90,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
+	tc := auth.GetTeamContext(r.Context())
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit == 0 {
@@ -99,9 +102,11 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 		Domain: q.Get("domain"),
 		Status: q.Get("status"),
 		Type:   storage.KnowledgeType(q.Get("type")),
+		Tag:    q.Get("tag"),
 		Limit:  limit,
 		Offset: offset,
 		Search: q.Get("search"),
+		TeamID: tc.TeamID,
 	}
 	entries, err := s.store.ListEntries(r.Context(), filter)
 	if err != nil {
@@ -114,20 +119,42 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, entries)
 }
 
-func (s *Server) handleKnowledgeGet(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.store.GetEntry(r.Context(), chi.URLParam(r, "id"))
+// fetchEntryForTeam loads an entry and enforces team access for the caller.
+// It writes the appropriate 404/500/403 response and returns ok=false when the
+// caller may not proceed. Entry TeamID is immutable after creation, so there is
+// no TOCTOU window between this check and a subsequent mutation.
+func (s *Server) fetchEntryForTeam(w http.ResponseWriter, r *http.Request, id string) (*storage.KnowledgeEntry, bool) {
+	entry, err := s.store.GetEntry(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "entry not found")
-			return
+			return nil, false
 		}
 		writeError(w, 500, "internal_error", fmt.Sprintf("get entry: %v", err))
+		return nil, false
+	}
+	tc := auth.GetTeamContext(r.Context())
+	if !auth.CanAccess(tc, entry.TeamID) {
+		writeError(w, 403, "forbidden", "entry belongs to another team")
+		return nil, false
+	}
+	return entry, true
+}
+
+func (s *Server) handleKnowledgeGet(w http.ResponseWriter, r *http.Request) {
+	entry, ok := s.fetchEntryForTeam(w, r, chi.URLParam(r, "id"))
+	if !ok {
 		return
 	}
 	writeJSON(w, entry)
 }
 
 func (s *Server) handleKnowledgeRate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	// Access check before body decode so cross-team probers get 403, not 400.
+	if _, ok := s.fetchEntryForTeam(w, r, id); !ok {
+		return
+	}
 	var body struct {
 		Rating float64 `json:"rating"`
 	}
@@ -139,7 +166,7 @@ func (s *Server) handleKnowledgeRate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "rating must be between 0 and 5")
 		return
 	}
-	if err := s.store.RateEntry(r.Context(), chi.URLParam(r, "id"), body.Rating); err != nil {
+	if err := s.store.RateEntry(r.Context(), id, body.Rating); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "entry not found")
 			return
@@ -151,7 +178,8 @@ func (s *Server) handleKnowledgeRate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClusterList(w http.ResponseWriter, r *http.Request) {
-	clusters, err := s.store.ListClusters(r.Context())
+	tc := auth.GetTeamContext(r.Context())
+	clusters, err := s.store.ListClusters(r.Context(), tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
@@ -163,7 +191,8 @@ func (s *Server) handleClusterList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDatasetList(w http.ResponseWriter, r *http.Request) {
-	snaps, err := s.store.ListSnapshots(r.Context())
+	tc := auth.GetTeamContext(r.Context())
+	snaps, err := s.store.ListSnapshots(r.Context(), tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list snapshots: %v", err))
 		return
@@ -181,7 +210,8 @@ func (s *Server) handleDatasetExport(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 
-	snaps, err := s.store.ListSnapshots(r.Context())
+	// Fetch globally so we can distinguish 404 from 403.
+	snaps, err := s.store.ListSnapshots(r.Context(), "")
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list snapshots: %v", err))
 		return
@@ -195,6 +225,11 @@ func (s *Server) handleDatasetExport(w http.ResponseWriter, r *http.Request) {
 	}
 	if snap == nil {
 		writeError(w, 404, "not_found", "snapshot not found")
+		return
+	}
+	tc := auth.GetTeamContext(r.Context())
+	if !auth.CanAccess(tc, snap.TeamID) {
+		writeError(w, 403, "forbidden", "snapshot belongs to another team")
 		return
 	}
 
@@ -220,7 +255,8 @@ func (s *Server) handleDatasetExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.store.ListAgents(r.Context())
+	tc := auth.GetTeamContext(r.Context())
+	agents, err := s.store.ListAgents(r.Context(), tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
 		return
@@ -244,6 +280,11 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
 		return
 	}
+	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, a.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
+		return
+	}
 	versions, err := s.store.ListAgentVersions(ctx, id)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agent versions: %v", err))
@@ -256,7 +297,24 @@ func (s *Server) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentPublish(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.PublishAgent(r.Context(), chi.URLParam(r, "id")); err != nil {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	a, err := s.store.GetAgent(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
+		return
+	}
+	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, a.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
+		return
+	}
+	if err := s.store.PublishAgent(ctx, id); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "agent not found")
 			return
@@ -284,6 +342,11 @@ func (s *Server) handleAgentExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
 		return
 	}
+	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, a.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
+		return
+	}
 
 	var contentType, ext string
 	switch format {
@@ -303,11 +366,6 @@ func (s *Server) handleAgentExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
-	if s.aiSrc == nil {
-		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
-		return
-	}
-
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
 
@@ -331,14 +389,23 @@ func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve agent LLM per request so saved team settings take effect immediately.
 	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, current.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
+		return
+	}
+
+	if s.aiSrc == nil {
+		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
+		return
+	}
 	agentLLM := s.aiSrc.AgentLLM(ctx, tc.TeamID)
 	if agentLLM == nil {
 		writeError(w, 503, "no_llm", "LLM not configured — set ANTHROPIC_API_KEY to enable agent refactoring")
 		return
 	}
 
-	// Load relevant knowledge entries for context (same domain, up to 20).
-	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20})
+	// Load relevant knowledge entries for context (same domain, up to 20, scoped to team).
+	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20, TeamID: tc.TeamID})
 
 	revised, err := agentpkg.Refactor(ctx, agentLLM, current, entries, body.Feedback)
 	if err != nil {
@@ -370,11 +437,19 @@ func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentBulkExport(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.store.ListAgents(r.Context())
+	agents, err := s.store.ListAgents(r.Context(), "")
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
 		return
 	}
+	tc := auth.GetTeamContext(r.Context())
+	visible := agents[:0]
+	for _, a := range agents {
+		if auth.CanAccess(tc, a.TeamID) {
+			visible = append(visible, a)
+		}
+	}
+	agents = visible
 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="agents-export.zip"`)
@@ -393,7 +468,8 @@ func (s *Server) handleAgentBulkExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipelineStatus(w http.ResponseWriter, r *http.Request) {
-	run, err := s.store.GetLatestPipelineRun(r.Context())
+	tc := auth.GetTeamContext(r.Context())
+	run, err := s.store.GetLatestPipelineRun(r.Context(), tc.TeamID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
 		return
@@ -406,12 +482,13 @@ func (s *Server) handlePipelineStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListPipelineRuns(w http.ResponseWriter, r *http.Request) {
+	tc := auth.GetTeamContext(r.Context())
 	limitStr := r.URL.Query().Get("limit")
 	limit := 20
 	if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 		limit = n
 	}
-	runs, err := s.store.ListPipelineRuns(r.Context(), limit)
+	runs, err := s.store.ListPipelineRuns(r.Context(), tc.TeamID, limit)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list pipeline runs: %v", err))
 		return
@@ -450,13 +527,20 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 		Author:      body.Author,
 		Team:        tc.TeamID,
 		TeamID:      tc.TeamID,
-		Tags:        body.Tags,
+		Tags:        tagspkg.Merge(body.Tags, tagspkg.ExtractHashtags(body.Title+" "+body.Content)),
 		Status:      "pending",
 	}
 	id, err := s.store.StoreEntry(r.Context(), entry, nil)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("store entry: %v", err))
 		return
+	}
+
+	// Fire-and-forget auto-categorization; s.aiSrc is optional.
+	if s.aiSrc != nil {
+		entry.ID = id
+		tagger := &tagspkg.AutoTagger{Store: s.store, LLMFor: s.aiSrc.ImprovementLLM}
+		tagger.TagEntryAsync(r.Context(), entry, tc.TeamID)
 	}
 
 	// Publish a live event so connected SSE clients see the new entry in real time.
@@ -476,14 +560,10 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id := chi.URLParam(r, "id")
-	existing, err := s.store.GetEntry(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeError(w, 404, "not_found", "entry not found")
-			return
-		}
-		writeError(w, 500, "internal_error", fmt.Sprintf("get entry: %v", err))
+	existing, ok := s.fetchEntryForTeam(w, r, id)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -512,7 +592,7 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 	if body.Tags != nil {
 		existing.Tags = body.Tags
 	}
-	if err := s.store.UpdateEntry(r.Context(), *existing); err != nil {
+	if err := s.store.UpdateEntry(ctx, *existing); err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("update entry: %v", err))
 		return
 	}
@@ -520,7 +600,12 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	if _, ok := s.fetchEntryForTeam(w, r, id); !ok {
+		return
+	}
+	if err := s.store.DeleteEntry(ctx, id); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "entry not found")
 			return
@@ -532,7 +617,12 @@ func (s *Server) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKnowledgeApprove(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.ApproveEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	if _, ok := s.fetchEntryForTeam(w, r, id); !ok {
+		return
+	}
+	if err := s.store.ApproveEntry(ctx, id); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "entry not found")
 			return
@@ -544,7 +634,12 @@ func (s *Server) handleKnowledgeApprove(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleKnowledgeReject(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.RejectEntry(r.Context(), chi.URLParam(r, "id")); err != nil {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	if _, ok := s.fetchEntryForTeam(w, r, id); !ok {
+		return
+	}
+	if err := s.store.RejectEntry(ctx, id); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, 404, "not_found", "entry not found")
 			return
@@ -557,13 +652,19 @@ func (s *Server) handleKnowledgeReject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClusterGet(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	clusters, err := s.store.ListClusters(r.Context())
+	// Fetch globally first so we can distinguish 404 from 403.
+	clusters, err := s.store.ListClusters(r.Context(), "")
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
 	}
 	for _, c := range clusters {
 		if c.ID == id {
+			tc := auth.GetTeamContext(r.Context())
+			if !auth.CanAccess(tc, c.TeamID) {
+				writeError(w, 403, "forbidden", "cluster belongs to another team")
+				return
+			}
 			writeJSON(w, c)
 			return
 		}
@@ -573,13 +674,19 @@ func (s *Server) handleClusterGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	clusters, err := s.store.ListClusters(r.Context())
+	// Fetch globally first so we can distinguish 404 from 403.
+	clusters, err := s.store.ListClusters(r.Context(), "")
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
 	}
 	for _, c := range clusters {
 		if c.ID == id {
+			tc := auth.GetTeamContext(r.Context())
+			if !auth.CanAccess(tc, c.TeamID) {
+				writeError(w, 403, "forbidden", "cluster belongs to another team")
+				return
+			}
 			writeJSON(w, map[string]string{"summary": c.Summary})
 			return
 		}
@@ -589,9 +696,14 @@ func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAgentLatestByDomain(w http.ResponseWriter, r *http.Request) {
 	domain := chi.URLParam(r, "domain")
-	agent, err := s.store.GetAgentByDomain(r.Context(), domain)
+	tc := auth.GetTeamContext(r.Context())
+	agent, err := s.store.GetAgentByDomain(r.Context(), domain, tc.TeamID)
 	if err != nil || agent == nil {
 		writeError(w, 404, "not_found", "no agent for domain")
+		return
+	}
+	if !auth.CanAccess(tc, agent.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
 		return
 	}
 	writeJSON(w, agent)

@@ -16,6 +16,8 @@ type Config struct {
 	AnthropicAPIKey    string
 	AnthropicModel     string
 	AgentModel         string
+	LLMProvider        string // LLM_PROVIDER — "" | "anthropic" | "ollama"; empty means anthropic (back-compat)
+	OllamaLLMModel     string // OLLAMA_LLM_MODEL — chat model when LLM_PROVIDER=ollama; distinct from OllamaModel (embeddings)
 	PipelineInterval   time.Duration
 	PipelineMinEntries int
 	ClusterThreshold   float64
@@ -97,6 +99,8 @@ func Load() (Config, error) {
 		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		AnthropicModel:     envOrDefault("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
 		AgentModel:         envOrDefault("AGENT_MODEL", "claude-sonnet-4-6"),
+		LLMProvider:        envOrDefault("LLM_PROVIDER", ""),
+		OllamaLLMModel:     os.Getenv("OLLAMA_LLM_MODEL"),
 		PipelineInterval:   interval,
 		PipelineMinEntries: minEntries,
 		ClusterThreshold:   clusterThresh,

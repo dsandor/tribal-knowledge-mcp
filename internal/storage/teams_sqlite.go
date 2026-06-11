@@ -392,14 +392,16 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, tokenHash string) error
 func (s *SQLiteStore) GetTeamSettings(ctx context.Context, teamID string) (*TeamSettings, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
-		       anthropic_api_key, anthropic_model, ollama_url, ollama_model, updated_at
+		       anthropic_api_key, anthropic_model, ollama_url, ollama_model,
+		       llm_provider, ollama_llm_model, ai_touchpoints, updated_at
 		FROM team_settings WHERE team_id = ?
 	`, teamID)
 	var ts TeamSettings
-	var domainsJSON, updatedAt string
+	var domainsJSON, aiTouchpointsJSON, updatedAt string
 	err := row.Scan(
 		&ts.TeamID, &domainsJSON, &ts.ClusterThreshold, &ts.PipelineMinEntries, &ts.AgentModel,
-		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel, &updatedAt,
+		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel,
+		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsJSON, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -414,12 +416,18 @@ func (s *SQLiteStore) GetTeamSettings(ctx context.Context, teamID string) (*Team
 				AnthropicModel:     "",
 				OllamaURL:          "",
 				OllamaModel:        "",
+				LLMProvider:        "",
+				OllamaLLMModel:     "",
+				AITouchpoints:      map[string]AITouchpoint{},
 			}, nil
 		}
 		return nil, fmt.Errorf("get team settings: %w", err)
 	}
 	if err := json.Unmarshal([]byte(domainsJSON), &ts.Domains); err != nil {
 		ts.Domains = []string{}
+	}
+	if err := json.Unmarshal([]byte(aiTouchpointsJSON), &ts.AITouchpoints); err != nil {
+		ts.AITouchpoints = map[string]AITouchpoint{}
 	}
 	ts.UpdatedAt = parseTimestamp(updatedAt)
 	return &ts, nil
@@ -430,12 +438,21 @@ func (s *SQLiteStore) PutTeamSettings(ctx context.Context, ts TeamSettings) erro
 	if err != nil {
 		return fmt.Errorf("marshal domains: %w", err)
 	}
+	tps := ts.AITouchpoints
+	if tps == nil {
+		tps = map[string]AITouchpoint{}
+	}
+	aiTouchpointsJSON, err := json.Marshal(tps)
+	if err != nil {
+		return fmt.Errorf("marshal ai_touchpoints: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO team_settings (
 			team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
-			anthropic_api_key, anthropic_model, ollama_url, ollama_model, updated_at
+			anthropic_api_key, anthropic_model, ollama_url, ollama_model,
+			llm_provider, ollama_llm_model, ai_touchpoints, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(team_id) DO UPDATE SET
 			domains              = excluded.domains,
 			cluster_threshold    = excluded.cluster_threshold,
@@ -445,9 +462,13 @@ func (s *SQLiteStore) PutTeamSettings(ctx context.Context, ts TeamSettings) erro
 			anthropic_model      = excluded.anthropic_model,
 			ollama_url           = excluded.ollama_url,
 			ollama_model         = excluded.ollama_model,
+			llm_provider         = excluded.llm_provider,
+			ollama_llm_model     = excluded.ollama_llm_model,
+			ai_touchpoints       = excluded.ai_touchpoints,
 			updated_at           = CURRENT_TIMESTAMP
 	`, ts.TeamID, string(domainsJSON), ts.ClusterThreshold, ts.PipelineMinEntries, ts.AgentModel,
-		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel)
+		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel,
+		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON))
 	if err != nil {
 		return fmt.Errorf("put team settings: %w", err)
 	}

@@ -719,12 +719,12 @@ func TestImportEnv_NoAISrc(t *testing.T) {
 func TestImportEnv_PreservesUntouchedFields(t *testing.T) {
 	store := &settingsStore{
 		settings: storage.TeamSettings{
-			TeamID:           "test-team",
-			OllamaURL:        "http://my-ollama",
-			OllamaModel:      "my-model",
-			ClusterThreshold: 0.90,
+			TeamID:             "test-team",
+			OllamaURL:          "http://my-ollama",
+			OllamaModel:        "my-model",
+			ClusterThreshold:   0.90,
 			PipelineMinEntries: 20,
-			Domains:          []string{"finance", "tech"},
+			Domains:            []string{"finance", "tech"},
 		},
 	}
 	store.mockStore = mockStore{}
@@ -763,5 +763,358 @@ func TestImportEnv_PreservesUntouchedFields(t *testing.T) {
 	}
 	if saved.AnthropicAPIKey != "env-key" {
 		t.Errorf("AnthropicAPIKey = %q, want env-key", saved.AnthropicAPIKey)
+	}
+}
+
+// TestAISettingsIncludesProviderFields verifies that GET /api/settings includes
+// llm_provider and ollama_llm_model inside the "ai" block with the correct
+// effective/saved/env/source structure.
+func TestAISettingsIncludesProviderFields(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:         "test-team",
+			LLMProvider:    "ollama",
+			OllamaLLMModel: "llama3.1",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	req := authRequest("GET", "/api/settings", "")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	aiRaw, ok := resp["ai"]
+	if !ok {
+		t.Fatal("response missing 'ai' block")
+	}
+	ai := aiRaw.(map[string]any)
+
+	checkField := func(name string, wantEffective, wantSource string) {
+		t.Helper()
+		raw, ok := ai[name]
+		if !ok {
+			t.Fatalf("ai block missing field %q", name)
+		}
+		m, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("ai.%s is not an object: %T", name, raw)
+		}
+		for _, key := range []string{"effective", "saved", "env", "source"} {
+			if _, exists := m[key]; !exists {
+				t.Errorf("ai.%s missing key %q", name, key)
+			}
+		}
+		if m["effective"] != wantEffective {
+			t.Errorf("ai.%s.effective = %v, want %q", name, m["effective"], wantEffective)
+		}
+		if m["source"] != wantSource {
+			t.Errorf("ai.%s.source = %v, want %q", name, m["source"], wantSource)
+		}
+	}
+
+	checkField("llm_provider", "ollama", "saved")
+	checkField("ollama_llm_model", "llama3.1", "saved")
+}
+
+// TestAISettingsPutProvider verifies that PUT /api/settings with llm_provider and
+// ollama_llm_model persists both fields, and a subsequent GET shows them with source "saved".
+func TestAISettingsPutProvider(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:             "test-team",
+			ClusterThreshold:   0.85,
+			PipelineMinEntries: 10,
+			AgentModel:         "claude-haiku-4-5-20251001",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	// PUT with llm_provider and ollama_llm_model.
+	body := `{"llm_provider":"ollama","ollama_llm_model":"llama3.1","cluster_threshold":0.85,"pipeline_min_entries":10,"agent_model":"claude-haiku-4-5-20251001"}`
+	req := authRequest("PUT", "/api/settings", body)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(store.putCalls) != 1 {
+		t.Fatalf("want 1 PutTeamSettings call, got %d", len(store.putCalls))
+	}
+	saved := store.putCalls[0]
+	if saved.LLMProvider != "ollama" {
+		t.Errorf("LLMProvider = %q, want ollama", saved.LLMProvider)
+	}
+	if saved.OllamaLLMModel != "llama3.1" {
+		t.Errorf("OllamaLLMModel = %q, want llama3.1", saved.OllamaLLMModel)
+	}
+
+	// GET and verify the ai block reflects source "saved".
+	req2 := authRequest("GET", "/api/settings", "")
+	w2 := httptest.NewRecorder()
+	srv.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	ai := resp["ai"].(map[string]any)
+
+	provField := ai["llm_provider"].(map[string]any)
+	if provField["effective"] != "ollama" {
+		t.Errorf("ai.llm_provider.effective = %v, want ollama", provField["effective"])
+	}
+	if provField["source"] != "saved" {
+		t.Errorf("ai.llm_provider.source = %v, want saved", provField["source"])
+	}
+
+	modelField := ai["ollama_llm_model"].(map[string]any)
+	if modelField["effective"] != "llama3.1" {
+		t.Errorf("ai.ollama_llm_model.effective = %v, want llama3.1", modelField["effective"])
+	}
+	if modelField["source"] != "saved" {
+		t.Errorf("ai.ollama_llm_model.source = %v, want saved", modelField["source"])
+	}
+}
+
+// TestAISettingsPutInvalidProvider verifies that PUT /api/settings with an
+// unrecognized llm_provider value returns 400 and does not persist anything.
+func TestAISettingsPutInvalidProvider(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:             "test-team",
+			LLMProvider:        "anthropic",
+			ClusterThreshold:   0.85,
+			PipelineMinEntries: 10,
+			AgentModel:         "claude-haiku-4-5-20251001",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	body := `{"llm_provider":"openai","cluster_threshold":0.85,"pipeline_min_entries":10,"agent_model":"claude-haiku-4-5-20251001"}`
+	req := authRequest("PUT", "/api/settings", body)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for invalid llm_provider, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Nothing should have been persisted.
+	if len(store.putCalls) != 0 {
+		t.Errorf("want 0 PutTeamSettings calls on invalid provider, got %d", len(store.putCalls))
+	}
+
+	// Existing settings should be unchanged.
+	if store.settings.LLMProvider != "anthropic" {
+		t.Errorf("LLMProvider changed to %q, want anthropic (unchanged)", store.settings.LLMProvider)
+	}
+}
+
+// TestAISettingsIncludesTouchpoints verifies that GET /api/settings includes an
+// "ai_touchpoints" object inside the "ai" block when saved settings have entries.
+func TestAISettingsIncludesTouchpoints(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID: "test-team",
+			AITouchpoints: map[string]storage.AITouchpoint{
+				"analysis": {Provider: "ollama", Model: "llama3.1"},
+			},
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	req := authRequest("GET", "/api/settings", "")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	aiRaw, ok := resp["ai"]
+	if !ok {
+		t.Fatal("response missing 'ai' block")
+	}
+	ai := aiRaw.(map[string]any)
+
+	tpRaw, ok := ai["ai_touchpoints"]
+	if !ok {
+		t.Fatal("ai block missing 'ai_touchpoints'")
+	}
+	tp, ok := tpRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("ai_touchpoints is not an object: %T", tpRaw)
+	}
+	analysisRaw, ok := tp["analysis"]
+	if !ok {
+		t.Fatal("ai_touchpoints missing 'analysis' entry")
+	}
+	analysis, ok := analysisRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("ai_touchpoints.analysis is not an object: %T", analysisRaw)
+	}
+	if analysis["provider"] != "ollama" {
+		t.Errorf("ai_touchpoints.analysis.provider = %v, want ollama", analysis["provider"])
+	}
+	if analysis["model"] != "llama3.1" {
+		t.Errorf("ai_touchpoints.analysis.model = %v, want llama3.1", analysis["model"])
+	}
+}
+
+// TestAISettingsPutTouchpoints verifies that PUT /api/settings persists
+// ai_touchpoints and a subsequent GET round-trips the map correctly.
+func TestAISettingsPutTouchpoints(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:             "test-team",
+			ClusterThreshold:   0.85,
+			PipelineMinEntries: 10,
+			AgentModel:         "claude-haiku-4-5-20251001",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	body := `{"cluster_threshold":0.85,"pipeline_min_entries":10,"agent_model":"claude-haiku-4-5-20251001","ai_touchpoints":{"enrichment":{"provider":"ollama","model":"m2"}}}`
+	req := authRequest("PUT", "/api/settings", body)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(store.putCalls) != 1 {
+		t.Fatalf("want 1 PutTeamSettings call, got %d", len(store.putCalls))
+	}
+	saved := store.putCalls[0]
+	tp, ok := saved.AITouchpoints["enrichment"]
+	if !ok {
+		t.Fatal("AITouchpoints missing 'enrichment' after PUT")
+	}
+	if tp.Provider != "ollama" {
+		t.Errorf("AITouchpoints.enrichment.Provider = %q, want ollama", tp.Provider)
+	}
+	if tp.Model != "m2" {
+		t.Errorf("AITouchpoints.enrichment.Model = %q, want m2", tp.Model)
+	}
+
+	// GET round-trip.
+	req2 := authRequest("GET", "/api/settings", "")
+	w2 := httptest.NewRecorder()
+	srv.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	ai := resp["ai"].(map[string]any)
+	tpRaw := ai["ai_touchpoints"].(map[string]any)
+	enrichment := tpRaw["enrichment"].(map[string]any)
+	if enrichment["provider"] != "ollama" {
+		t.Errorf("round-trip provider = %v, want ollama", enrichment["provider"])
+	}
+	if enrichment["model"] != "m2" {
+		t.Errorf("round-trip model = %v, want m2", enrichment["model"])
+	}
+}
+
+// TestAISettingsPutTouchpointInvalidKey verifies that PUT /api/settings with an
+// unrecognized touchpoint key returns 400 and does not persist anything.
+func TestAISettingsPutTouchpointInvalidKey(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:             "test-team",
+			ClusterThreshold:   0.85,
+			PipelineMinEntries: 10,
+			AgentModel:         "claude-haiku-4-5-20251001",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	body := `{"cluster_threshold":0.85,"pipeline_min_entries":10,"agent_model":"claude-haiku-4-5-20251001","ai_touchpoints":{"embeddings":{"provider":"ollama","model":"m1"}}}`
+	req := authRequest("PUT", "/api/settings", body)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for invalid touchpoint key, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(store.putCalls) != 0 {
+		t.Errorf("want 0 PutTeamSettings calls on invalid key, got %d", len(store.putCalls))
+	}
+}
+
+// TestAISettingsPutTouchpointInvalidProvider verifies that PUT /api/settings with
+// an unrecognized touchpoint provider returns 400 and does not persist anything.
+func TestAISettingsPutTouchpointInvalidProvider(t *testing.T) {
+	store := &settingsStore{
+		settings: storage.TeamSettings{
+			TeamID:             "test-team",
+			ClusterThreshold:   0.85,
+			PipelineMinEntries: 10,
+			AgentModel:         "claude-haiku-4-5-20251001",
+		},
+	}
+	store.mockStore = mockStore{}
+
+	src := newAISources(store, aiconfig.EnvDefaults{})
+	srv := newAITestServer(t, store, src)
+
+	body := `{"cluster_threshold":0.85,"pipeline_min_entries":10,"agent_model":"claude-haiku-4-5-20251001","ai_touchpoints":{"analysis":{"provider":"openai","model":"gpt-4"}}}`
+	req := authRequest("PUT", "/api/settings", body)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for invalid touchpoint provider, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(store.putCalls) != 0 {
+		t.Errorf("want 0 PutTeamSettings calls on invalid provider, got %d", len(store.putCalls))
 	}
 }

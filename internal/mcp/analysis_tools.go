@@ -12,7 +12,8 @@ import (
 // HandleClusterList returns a handler that lists all knowledge clusters.
 func HandleClusterList(store storage.AnalysisStore) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		clusters, err := store.ListClusters(ctx)
+		teamID, _ := resolveActorTeam(ctx)
+		clusters, err := store.ListClusters(ctx, teamID)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("list clusters: %v", err)), nil
 		}
@@ -30,11 +31,12 @@ func HandleClusterList(store storage.AnalysisStore) func(context.Context, mcplib
 // HandleAnalysisStatus returns a handler that reports pipeline and snapshot status.
 func HandleAnalysisStatus(store storage.AnalysisStore) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		run, err := store.GetLatestPipelineRun(ctx)
+		teamID, _ := resolveActorTeam(ctx)
+		run, err := store.GetLatestPipelineRun(ctx, teamID)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("get pipeline run: %v", err)), nil
 		}
-		snap, err := store.GetLatestSnapshot(ctx)
+		snap, err := store.GetLatestSnapshot(ctx, teamID)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("get snapshot: %v", err)), nil
 		}

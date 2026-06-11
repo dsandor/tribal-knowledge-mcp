@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -46,7 +47,7 @@ func HandlePromptSuggest(store storage.Store, src *aiconfig.Sources) server.Tool
 			teamID = src.DefaultTeam
 		}
 		embedder := src.Embedder(ctx, teamID)
-		llmClient := src.AnalysisLLM(ctx, teamID)
+		llmClient := src.EnrichmentLLM(ctx, teamID)
 
 		if embedder == nil || llmClient == nil {
 			return mcplib.NewToolResultText(prompt), nil
@@ -57,8 +58,30 @@ func HandlePromptSuggest(store storage.Store, src *aiconfig.Sources) server.Tool
 			return mcplib.NewToolResultText(prompt), nil
 		}
 
-		results, err := store.SearchSimilar(ctx, vec, 5)
-		if err != nil || len(results) == 0 {
+		const wantK = 5
+		fetchK := wantK * 2
+		if fetchK > 40 {
+			fetchK = 40
+		}
+		results, err := store.SearchSimilar(ctx, vec, fetchK)
+		if err != nil {
+			return mcplib.NewToolResultText(prompt), nil
+		}
+		// Team-scoping: filter out entries the caller cannot access.
+		tc := auth.GetTeamContext(ctx)
+		{
+			filtered := results[:0]
+			for _, r := range results {
+				if auth.CanAccess(tc, r.Entry.TeamID) {
+					filtered = append(filtered, r)
+				}
+			}
+			results = filtered
+		}
+		if len(results) > wantK {
+			results = results[:wantK]
+		}
+		if len(results) == 0 {
 			return mcplib.NewToolResultText(prompt), nil
 		}
 
@@ -139,11 +162,30 @@ func HandleEnhanceWithContext(store storage.Store, src *aiconfig.Sources) func(c
 		if embedder != nil && prompt != "" {
 			vec, err := embedder.Embed(ctx, prompt)
 			if err == nil {
-				results, err := store.SearchSimilar(ctx, vec, 3)
-				if err == nil && len(results) > 0 {
-					preamble.WriteString("## Relevant Team Knowledge\n")
+				const wantK2 = 3
+				fetchK2 := wantK2 * 2
+				if fetchK2 > 40 {
+					fetchK2 = 40
+				}
+				results, err := store.SearchSimilar(ctx, vec, fetchK2)
+				if err == nil {
+					// Team-scoping: filter out entries the caller cannot access.
+					tc2 := auth.GetTeamContext(ctx)
+					filtered2 := results[:0]
 					for _, r := range results {
-						preamble.WriteString(fmt.Sprintf("### %s\n%s\n\n", r.Entry.Title, r.Entry.Content))
+						if auth.CanAccess(tc2, r.Entry.TeamID) {
+							filtered2 = append(filtered2, r)
+						}
+					}
+					results = filtered2
+					if len(results) > wantK2 {
+						results = results[:wantK2]
+					}
+					if len(results) > 0 {
+						preamble.WriteString("## Relevant Team Knowledge\n")
+						for _, r := range results {
+							preamble.WriteString(fmt.Sprintf("### %s\n%s\n\n", r.Entry.Title, r.Entry.Content))
+						}
 					}
 				}
 			}
@@ -151,9 +193,9 @@ func HandleEnhanceWithContext(store storage.Store, src *aiconfig.Sources) func(c
 
 		if domain != "" {
 			if agentStore, ok := store.(interface {
-				GetAgentByDomain(ctx context.Context, domain string) (*storage.Agent, error)
+				GetAgentByDomain(ctx context.Context, domain, teamID string) (*storage.Agent, error)
 			}); ok {
-				a, _ := agentStore.GetAgentByDomain(ctx, domain)
+				a, _ := agentStore.GetAgentByDomain(ctx, domain, teamID)
 				if a != nil && a.Status == storage.AgentStatusPublished {
 					preamble.WriteString(fmt.Sprintf("## Domain Agent: %s\n%s\n\n", a.Domain, a.SystemPrompt))
 				}

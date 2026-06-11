@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -36,7 +37,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 
 	s.AddTool(
 		mcplib.NewTool("knowledge_store",
-			mcplib.WithDescription("Call at the END of any non-trivial task to capture a reusable learning (prompt template, pattern, workflow, domain fact, or anti-pattern). Prefer storing over letting knowledge evaporate. Include concrete content and a clear description of when to use this entry. Skipping this means the team loses the insight."),
+			mcplib.WithDescription("Call at the END of any non-trivial task to capture a reusable learning (prompt template, pattern, workflow, domain fact, or anti-pattern). Prefer storing over letting knowledge evaporate. Include concrete content and a clear description of when to use this entry. Skipping this means the team loses the insight. Inline #hashtags in the title or content are automatically extracted as tags."),
 			mcplib.WithString("title", mcplib.Required(), mcplib.Description("Short descriptive title")),
 			mcplib.WithString("content", mcplib.Required(), mcplib.Description("Full content of the knowledge entry")),
 			mcplib.WithString("type", mcplib.Required(), mcplib.Description("One of: prompt, pattern, workflow, domain_fact, anti_pattern")),
@@ -44,7 +45,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithString("description", mcplib.Description("When and why to use this entry")),
 			mcplib.WithString("author", mcplib.Description("Author identifier")),
 			mcplib.WithString("team", mcplib.Description("Team identifier")),
-			mcplib.WithArray("tags", mcplib.Description("Additional tags")),
+			mcplib.WithArray("tags", mcplib.Description("Additional tags (inline #hashtags in content are also extracted automatically)")),
 			mcplib.WithBoolean("dry_run", mcplib.Description("If true, validate and preview the entry without storing it. Returns the entry that would be stored including its content_hash.")),
 		),
 		HandleKnowledgeStore(store, src, eventBus),
@@ -138,8 +139,19 @@ func RegisterAgentTools(s *server.MCPServer, store storage.AgentStore) {
 		),
 		func(ctx context.Context, req mcplib.GetPromptRequest) (*mcplib.GetPromptResult, error) {
 			domain := req.Params.Arguments["domain"]
-			a, err := store.GetAgentByDomain(ctx, domain)
+			teamID, _ := resolveActorTeam(ctx)
+			a, err := store.GetAgentByDomain(ctx, domain, teamID)
 			if err != nil || a == nil || a.Status != storage.AgentStatusPublished {
+				msg := fmt.Sprintf("No published agent found for domain: %s", domain)
+				return &mcplib.GetPromptResult{
+					Description: msg,
+					Messages: []mcplib.PromptMessage{
+						{Role: mcplib.RoleUser, Content: mcplib.TextContent{Type: "text", Text: msg}},
+					},
+				}, nil
+			}
+			tc := auth.GetTeamContext(ctx)
+			if !auth.CanAccess(tc, a.TeamID) {
 				msg := fmt.Sprintf("No published agent found for domain: %s", domain)
 				return &mcplib.GetPromptResult{
 					Description: msg,

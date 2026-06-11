@@ -17,8 +17,8 @@ import (
 // Compile-time checks that *PostgresStore satisfies every store interface.
 // AgentStore embeds AnalysisStore which embeds Store, so one assertion covers all three base interfaces.
 var _ AgentStore = (*PostgresStore)(nil)
-var _ TeamStore  = (*PostgresStore)(nil)
-var _ RuleStore  = (*PostgresStore)(nil)
+var _ TeamStore = (*PostgresStore)(nil)
+var _ RuleStore = (*PostgresStore)(nil)
 
 type PostgresStore struct {
 	db           *sql.DB
@@ -71,6 +71,8 @@ func (s *PostgresStore) migrate() error {
 
 	// Idempotent: add content_hash column to existing databases.
 	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''`)
+	// Idempotent: add auto_tags column to existing databases.
+	_, _ = s.db.Exec(`ALTER TABLE entries ADD COLUMN IF NOT EXISTS auto_tags JSONB NOT NULL DEFAULT '[]'`)
 
 	_, err = s.db.ExecContext(context.Background(), fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS embeddings (
@@ -123,6 +125,10 @@ func (s *PostgresStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, em
 	if err != nil {
 		return "", fmt.Errorf("marshal tags: %w", err)
 	}
+	autoTagsJSON, err := json.Marshal(entry.AutoTags)
+	if err != nil {
+		return "", fmt.Errorf("marshal auto tags: %w", err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -134,11 +140,11 @@ func (s *PostgresStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, em
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO entries
-			(id, type, title, content, description, domain, tags, author, team, team_id, status, content_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			(id, type, title, content, description, domain, tags, auto_tags, author, team, team_id, status, content_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`,
 		entry.ID, string(entry.Type), entry.Title, entry.Content,
-		entry.Description, entry.Domain, string(tagsJSON),
+		entry.Description, entry.Domain, string(tagsJSON), string(autoTagsJSON),
 		entry.Author, entry.Team, entry.TeamID, statusOrDefault(entry.Status), contentHash,
 	)
 	if err != nil {
@@ -164,7 +170,7 @@ func (s *PostgresStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, em
 
 func (s *PostgresStore) GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries WHERE id = $1
 	`, id)
@@ -193,7 +199,7 @@ func (s *PostgresStore) ListEntries(ctx context.Context, filter ListFilter) ([]K
 	}
 
 	query := `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries WHERE 1=1`
 
@@ -217,6 +223,11 @@ func (s *PostgresStore) ListEntries(ctx context.Context, filter ListFilter) ([]K
 	}
 	if filter.TeamID != "" {
 		query += " AND team_id = " + nextArg(filter.TeamID)
+	}
+	if filter.Tag != "" {
+		p1 := nextArg(filter.Tag)
+		p2 := nextArg(filter.Tag)
+		query += fmt.Sprintf(" AND (jsonb_exists(tags, %s) OR jsonb_exists(auto_tags, %s))", p1, p2)
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -301,7 +312,7 @@ func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, 
 
 	rows2, err := s.db.QueryContext(ctx,
 		fmt.Sprintf(`
-			SELECT id, type, title, content, description, domain, tags, author, team,
+			SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 			       created_at, updated_at, version, rating, usage_count, team_id, status
 			FROM entries WHERE id IN (%s)
 		`, strings.Join(placeholders, ",")),
@@ -389,6 +400,37 @@ func (s *PostgresStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) e
 	return nil
 }
 
+func (s *PostgresStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {
+	autoTagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("marshal auto tags: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE entries SET auto_tags = $1, updated_at = NOW() WHERE id = $2`,
+		string(autoTagsJSON), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update auto tags: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("entry %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *PostgresStore) BackfillTeamID(ctx context.Context, teamID string) error {
+	if teamID == "" {
+		return nil
+	}
+	for _, table := range []string{"entries", "clusters", "agents", "agent_versions", "dataset_snapshots", "pipeline_runs"} {
+		if _, err := s.db.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET team_id = $1 WHERE team_id = ''", table), teamID); err != nil {
+			return fmt.Errorf("backfill %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func (s *PostgresStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
@@ -402,11 +444,12 @@ func (s *PostgresStore) Close() error {
 func scanEntryPG(row rowScanner) (*KnowledgeEntry, error) {
 	var e KnowledgeEntry
 	var tagsRaw []byte
+	var autoTagsRaw []byte
 	var createdAt, updatedAt time.Time
 
 	err := row.Scan(
 		&e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-		&e.Domain, &tagsRaw, &e.Author, &e.Team,
+		&e.Domain, &tagsRaw, &autoTagsRaw, &e.Author, &e.Team,
 		&createdAt, &updatedAt, &e.Version,
 		&e.Rating, &e.UsageCount, &e.TeamID, &e.Status,
 	)
@@ -416,6 +459,9 @@ func scanEntryPG(row rowScanner) (*KnowledgeEntry, error) {
 
 	if err := json.Unmarshal(tagsRaw, &e.Tags); err != nil {
 		e.Tags = []string{}
+	}
+	if err := json.Unmarshal(autoTagsRaw, &e.AutoTags); err != nil {
+		e.AutoTags = []string{}
 	}
 
 	e.CreatedAt = createdAt
@@ -433,7 +479,7 @@ func statusOrDefault(s string) string {
 
 func (s *PostgresStore) GetEntryByContentHash(ctx context.Context, hash string) (*KnowledgeEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries WHERE content_hash = $1 LIMIT 1
 	`, hash)

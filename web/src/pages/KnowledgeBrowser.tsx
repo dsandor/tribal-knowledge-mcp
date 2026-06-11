@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type KnowledgeEntry } from '@/lib/api'
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, Tag } from 'lucide-react'
+import { TagPill } from '@/components/ui/tag-pill'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -95,17 +96,19 @@ export default function KnowledgeBrowser() {
   const [domainInput, setDomainInput] = useState('')
   const [type, setType] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('hybrid')
+  const [tagFilter, setTagFilter] = useState('')
 
   useEffect(() => {
     let ignore = false
     setLoading(true)
+    setError(null)
     api.knowledge
-      .list({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search, domain, type, mode: searchMode })
+      .list({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search, domain, type, mode: searchMode, tag: tagFilter || undefined })
       .then(entries => { if (!ignore) setEntries(entries) })
       .catch(e => { if (!ignore) setError(e instanceof Error ? e.message : String(e)) })
       .finally(() => { if (!ignore) setLoading(false) })
     return () => { ignore = true }
-  }, [page, search, domain, type, searchMode])
+  }, [page, search, domain, type, searchMode, tagFilter])
 
   const handleSearch = () => { setSearch(searchInput); setPage(0) }
 
@@ -169,6 +172,15 @@ export default function KnowledgeBrowser() {
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
+          {tagFilter && (
+            <Chip
+              icon={<Tag style={{ width: 12, height: 12 }} />}
+              label={`tag: ${tagFilter}`}
+              size="small"
+              onDelete={() => { setTagFilter(''); setPage(0) }}
+              sx={{ bgcolor: 'rgba(16, 185, 129, 0.18)', color: '#34d399' }}
+            />
+          )}
           {search !== '' && MODE_HINTS[searchMode] && (
             <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
               {MODE_HINTS[searchMode]}
@@ -220,6 +232,32 @@ export default function KnowledgeBrowser() {
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
                       {e.Domain || 'no domain'} · {e.Author || 'unknown'} · ★ {(e.Rating ?? 0).toFixed(1)}
                     </Typography>
+                    {(() => {
+                      const user = e.Tags ?? []
+                      const auto = e.AutoTags ?? []
+                      const MAX = 5
+                      const pills = [
+                        ...user.map(t => ({ t, v: 'user' as const })),
+                        ...auto.map(t => ({ t, v: 'auto' as const })),
+                      ]
+                      if (pills.length === 0) return null
+                      const overflow = pills.length - MAX
+                      return (
+                        <Box
+                          sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}
+                          onClick={ev => { ev.preventDefault(); ev.stopPropagation() }}
+                        >
+                          {pills.slice(0, MAX).map(({ t, v }) => (
+                            <TagPill key={`${v}-${t}`} label={t} variant={v}
+                              onClick={() => { setTagFilter(t); setPage(0) }} />
+                          ))}
+                          {overflow > 0 && (
+                            <Chip label={`+${overflow}`} size="small" variant="outlined"
+                              sx={{ height: 20, fontSize: 10 }} />
+                          )}
+                        </Box>
+                      )
+                    })()}
                     {search && snippet && (
                       <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                         <Highlight text={snippet} query={search} />

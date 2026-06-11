@@ -82,6 +82,7 @@ func (s *SQLiteStore) migrate() error {
 		"ALTER TABLE entries ADD COLUMN rating REAL DEFAULT 0.0",
 		"ALTER TABLE entries ADD COLUMN usage_count INTEGER DEFAULT 0",
 		"ALTER TABLE entries ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE entries ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'",
 	} {
 		if _, err := s.db.Exec(col); err != nil {
 			if !strings.Contains(err.Error(), "duplicate column name") {
@@ -136,6 +137,20 @@ func (s *SQLiteStore) migrate() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("create dataset_snapshots table: %w", err)
+	}
+
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS analysis_cache (
+			kind       TEXT NOT NULL,
+			key        TEXT NOT NULL,
+			value      TEXT NOT NULL,
+			team_id    TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (kind, key)
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create analysis_cache table: %w", err)
 	}
 
 	_, err = s.db.Exec(`
@@ -273,6 +288,8 @@ func (s *SQLiteStore) migrate() error {
 		"ALTER TABLE agent_versions ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE rules ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE api_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE dataset_snapshots ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE pipeline_runs ADD COLUMN team_id TEXT NOT NULL DEFAULT ''",
 	}
 	for _, alter := range phase5Alters {
 		if _, err := s.db.Exec(alter); err != nil {
@@ -288,6 +305,9 @@ func (s *SQLiteStore) migrate() error {
 		"ALTER TABLE team_settings ADD COLUMN anthropic_model    TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE team_settings ADD COLUMN ollama_url         TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE team_settings ADD COLUMN ollama_model       TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE team_settings ADD COLUMN llm_provider       TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE team_settings ADD COLUMN ollama_llm_model   TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE team_settings ADD COLUMN ai_touchpoints     TEXT NOT NULL DEFAULT '{}'",
 	}
 	for _, alter := range teamSettingsAlters {
 		if _, err := s.db.Exec(alter); err != nil {
@@ -303,6 +323,10 @@ func (s *SQLiteStore) migrate() error {
 
 	if err := s.migrateFTS(); err != nil {
 		return fmt.Errorf("migrate fts: %w", err)
+	}
+
+	if err := s.migrateAgentsTeamUnique(); err != nil {
+		return fmt.Errorf("migrate agents team unique: %w", err)
 	}
 
 	return nil
@@ -389,7 +413,6 @@ func (s *SQLiteStore) migrateUsageTracking() error {
 	return nil
 }
 
-
 func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embedding []float32) (string, error) {
 	if embedding != nil && len(embedding) != s.embeddingDim {
 		return "", fmt.Errorf("embedding dim mismatch: got %d, want %d", len(embedding), s.embeddingDim)
@@ -401,6 +424,10 @@ func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embe
 	if err != nil {
 		return "", fmt.Errorf("marshal tags: %w", err)
 	}
+	autoTagsJSON, err := json.Marshal(entry.AutoTags)
+	if err != nil {
+		return "", fmt.Errorf("marshal auto tags: %w", err)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -411,10 +438,11 @@ func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embe
 	contentHash := sha256Hex(entry.Title + entry.Content)
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO entries (id, type, title, content, description, domain, tags, author, team, content_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO entries (id, type, title, content, description, domain, tags, auto_tags, author, team, team_id, status, content_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, entry.ID, string(entry.Type), entry.Title, entry.Content,
-		entry.Description, entry.Domain, string(tagsJSON), entry.Author, entry.Team, contentHash)
+		entry.Description, entry.Domain, string(tagsJSON), string(autoTagsJSON), entry.Author, entry.Team,
+		entry.TeamID, statusOrDefaultSQLite(entry.Status), contentHash)
 	if err != nil {
 		return "", fmt.Errorf("insert entry: %w", err)
 	}
@@ -449,7 +477,7 @@ func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embe
 
 func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries WHERE id = ?
 	`, id)
@@ -469,7 +497,7 @@ func (s *SQLiteStore) ListEntries(ctx context.Context, filter ListFilter) ([]Kno
 		limit = 50
 	}
 
-	query := `SELECT id, type, title, content, description, domain, tags, author, team,
+	query := `SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
                      created_at, updated_at, version, rating, usage_count, team_id, status
               FROM entries WHERE 1=1`
 	args := []any{}
@@ -497,6 +525,11 @@ func (s *SQLiteStore) ListEntries(ctx context.Context, filter ListFilter) ([]Kno
 	if filter.TeamID != "" {
 		query += " AND team_id = ?"
 		args = append(args, filter.TeamID)
+	}
+	if filter.Tag != "" {
+		query += ` AND (EXISTS (SELECT 1 FROM json_each(entries.tags) WHERE json_each.value = ?)
+		            OR EXISTS (SELECT 1 FROM json_each(entries.auto_tags) WHERE json_each.value = ?))`
+		args = append(args, filter.Tag, filter.Tag)
 	}
 	query += " ORDER BY created_at DESC"
 	if limit > 0 {
@@ -575,6 +608,37 @@ func (s *SQLiteStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("entry %q: %w", entry.ID, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {
+	autoTagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("marshal auto tags: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE entries SET auto_tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		string(autoTagsJSON), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update auto tags: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("entry %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) BackfillTeamID(ctx context.Context, teamID string) error {
+	if teamID == "" {
+		return nil
+	}
+	for _, table := range []string{"entries", "clusters", "agents", "agent_versions", "dataset_snapshots", "pipeline_runs"} {
+		if _, err := s.db.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET team_id = ? WHERE team_id = ''", table), teamID); err != nil {
+			return fmt.Errorf("backfill %s: %w", table, err)
+		}
 	}
 	return nil
 }
@@ -665,7 +729,7 @@ func (s *SQLiteStore) SearchSimilar(ctx context.Context, embedding []float32, to
 	}
 
 	rows2, err := s.db.QueryContext(ctx,
-		fmt.Sprintf(`SELECT rowid, id, type, title, content, description, domain, tags, author, team,
+		fmt.Sprintf(`SELECT rowid, id, type, title, content, description, domain, tags, auto_tags, author, team,
 		                    created_at, updated_at, version, rating, usage_count, team_id, status
 		             FROM entries WHERE rowid IN (%s)`, strings.Join(placeholders, ",")),
 		args...)
@@ -678,11 +742,12 @@ func (s *SQLiteStore) SearchSimilar(ctx context.Context, embedding []float32, to
 	for rows2.Next() {
 		var e KnowledgeEntry
 		var tagsJSON string
+		var autoTagsJSON string
 		var createdAt, updatedAt string
 		var rid int64
 		if err := rows2.Scan(
 			&rid, &e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-			&e.Domain, &tagsJSON, &e.Author, &e.Team,
+			&e.Domain, &tagsJSON, &autoTagsJSON, &e.Author, &e.Team,
 			&createdAt, &updatedAt, &e.Version,
 			&e.Rating, &e.UsageCount, &e.TeamID, &e.Status,
 		); err != nil {
@@ -690,6 +755,9 @@ func (s *SQLiteStore) SearchSimilar(ctx context.Context, embedding []float32, to
 		}
 		if err := json.Unmarshal([]byte(tagsJSON), &e.Tags); err != nil {
 			e.Tags = []string{}
+		}
+		if err := json.Unmarshal([]byte(autoTagsJSON), &e.AutoTags); err != nil {
+			e.AutoTags = []string{}
 		}
 		e.CreatedAt = parseTimestamp(createdAt)
 		e.UpdatedAt = parseTimestamp(updatedAt)
@@ -725,11 +793,12 @@ type rowScanner interface {
 func scanEntry(row rowScanner) (*KnowledgeEntry, error) {
 	var e KnowledgeEntry
 	var tagsJSON string
+	var autoTagsJSON string
 	var createdAt, updatedAt string
 
 	err := row.Scan(
 		&e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-		&e.Domain, &tagsJSON, &e.Author, &e.Team,
+		&e.Domain, &tagsJSON, &autoTagsJSON, &e.Author, &e.Team,
 		&createdAt, &updatedAt, &e.Version,
 		&e.Rating, &e.UsageCount, &e.TeamID, &e.Status,
 	)
@@ -739,6 +808,9 @@ func scanEntry(row rowScanner) (*KnowledgeEntry, error) {
 
 	if err := json.Unmarshal([]byte(tagsJSON), &e.Tags); err != nil {
 		e.Tags = []string{}
+	}
+	if err := json.Unmarshal([]byte(autoTagsJSON), &e.AutoTags); err != nil {
+		e.AutoTags = []string{}
 	}
 
 	e.CreatedAt = parseTimestamp(createdAt)
@@ -760,6 +832,121 @@ func parseTimestamp(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// migrateAgentsTeamUnique rebuilds the agents table so that uniqueness is on
+// (domain, team_id) rather than on domain alone. This is idempotent: if the
+// table already has the new shape (detected by checking for the old inline
+// UNIQUE column constraint in sqlite_master) it is a no-op.
+//
+// The legacy single-column UNIQUE constraint cannot be dropped via ALTER TABLE
+// in SQLite, so we use the standard SQLite table-rebuild pattern:
+//
+//  1. Save agent_versions rows (they reference agents.id via FK).
+//  2. Drop agent_versions (removes the FK pointing at agents).
+//  3. Create agents_new with UNIQUE(domain, team_id) table constraint.
+//  4. Copy all rows from agents into agents_new.
+//  5. DROP agents (now safe — no FK references it).
+//  6. Rename agents_new → agents.
+//  7. Recreate agent_versions with FK pointing at the new agents table.
+//  8. Restore saved agent_versions rows.
+//
+// Wrapped in a transaction so a crash leaves the DB in the old state.
+// FK enforcement is disabled for the connection while the rebuild is in progress.
+func (s *SQLiteStore) migrateAgentsTeamUnique() error {
+	// Check whether the old shape is still present. We detect the new shape by
+	// the presence of "UNIQUE(domain, team_id)" in the DDL.
+	var createSQL string
+	row := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'`)
+	if err := row.Scan(&createSQL); err != nil {
+		// Table doesn't exist yet — nothing to migrate.
+		return nil
+	}
+
+	if strings.Contains(createSQL, "UNIQUE(domain, team_id)") {
+		// Already migrated.
+		return nil
+	}
+
+	// No FK pragma toggle is needed: agent_versions (the only table with an
+	// FK into agents) is dropped inside the transaction before agents is
+	// touched, so the rebuild never violates a live constraint. (A pragma
+	// toggle here would also be unreliable — PRAGMA foreign_keys is
+	// per-connection and database/sql pools connections.)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin agents rebuild tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		// 1. Save agent_versions into a temp table (no FK constraints).
+		`CREATE TABLE IF NOT EXISTS agent_versions_bak AS SELECT * FROM agent_versions`,
+		// 2. Drop agent_versions so the FK on agents can be removed.
+		`DROP TABLE agent_versions`,
+		// 3. New agents table with composite uniqueness.
+		`CREATE TABLE agents_new (
+			id            TEXT PRIMARY KEY,
+			domain        TEXT NOT NULL,
+			version       INTEGER NOT NULL DEFAULT 1,
+			status        TEXT NOT NULL DEFAULT 'draft',
+			system_prompt TEXT NOT NULL DEFAULT '',
+			instructions  TEXT NOT NULL DEFAULT '',
+			anti_patterns TEXT NOT NULL DEFAULT '',
+			source_refs   TEXT NOT NULL DEFAULT '[]',
+			cluster_id    TEXT NOT NULL DEFAULT '',
+			team_id       TEXT NOT NULL DEFAULT '',
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(domain, team_id)
+		)`,
+		// 4. Copy existing agents data.
+		`INSERT INTO agents_new
+			SELECT id, domain, version, status, system_prompt, instructions,
+			       anti_patterns, source_refs, cluster_id, team_id, created_at, updated_at
+			FROM agents`,
+		// 5. Drop old agents table.
+		`DROP TABLE agents`,
+		// 6. Rename new table.
+		`ALTER TABLE agents_new RENAME TO agents`,
+		// 7. Recreate agent_versions with the FK pointing at the new agents table.
+		//    Include team_id (added via phase5Alters in the original migration).
+		`CREATE TABLE agent_versions (
+			id            TEXT PRIMARY KEY,
+			agent_id      TEXT NOT NULL REFERENCES agents(id),
+			version       INTEGER NOT NULL,
+			system_prompt TEXT NOT NULL DEFAULT '',
+			instructions  TEXT NOT NULL DEFAULT '',
+			anti_patterns TEXT NOT NULL DEFAULT '',
+			changelog     TEXT NOT NULL DEFAULT '',
+			team_id       TEXT NOT NULL DEFAULT '',
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(agent_id, version)
+		)`,
+		// 8. Restore saved versions (only those whose agent_id still exists).
+		//    We try to restore team_id from the backup; if the backup was taken
+		//    before the team_id column existed (very old DBs), fall back to ''.
+		`INSERT OR IGNORE INTO agent_versions (id, agent_id, version, system_prompt, instructions, anti_patterns, changelog, team_id, created_at)
+			SELECT id, agent_id, version, system_prompt, instructions, anti_patterns, changelog,
+			       IFNULL(team_id, '') AS team_id, created_at
+			FROM agent_versions_bak
+			WHERE agent_id IN (SELECT id FROM agents)`,
+		// 9. Clean up backup table.
+		`DROP TABLE agent_versions_bak`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			snippet := stmt
+			if len(snippet) > 80 {
+				snippet = snippet[:80]
+			}
+			return fmt.Errorf("agents rebuild: %w — sql: %s", err, snippet)
+		}
+	}
+
+	return tx.Commit()
 }
 
 // ── Phase 8: Usage tracking & activity feed ───────────────────────────────────
@@ -803,7 +990,7 @@ func (s *SQLiteStore) GetTrendingEntries(ctx context.Context, teamID string, day
 	// giving similar sub-linear dampening without any math extension.
 	const query = `
 		SELECT
-			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 			e.author, e.team, e.created_at, e.updated_at, e.version,
 			e.rating, e.usage_count, e.team_id, e.status,
 			COALESCE(u.cnt7,  0)         AS usage_count_7d,
@@ -844,9 +1031,9 @@ func (s *SQLiteStore) GetTrendingEntries(ctx context.Context, teamID string, day
 	var results []TrendingEntry
 	for rows.Next() {
 		var t TrendingEntry
-		var tagsJSON, createdAt, updatedAt string
+		var tagsJSON, autoTagsJSON, createdAt, updatedAt string
 		if err := rows.Scan(
-			&t.ID, &t.Type, &t.Title, &t.Content, &t.Description, &t.Domain, &tagsJSON,
+			&t.ID, &t.Type, &t.Title, &t.Content, &t.Description, &t.Domain, &tagsJSON, &autoTagsJSON,
 			&t.Author, &t.Team, &createdAt, &updatedAt, &t.Version,
 			&t.Rating, &t.UsageCount, &t.TeamID, &t.Status,
 			&t.UsageCount7d, &t.UsageCount30d, &t.AvgOutcome, &t.SignalScore,
@@ -855,6 +1042,9 @@ func (s *SQLiteStore) GetTrendingEntries(ctx context.Context, teamID string, day
 		}
 		if err := json.Unmarshal([]byte(tagsJSON), &t.Tags); err != nil {
 			t.Tags = []string{}
+		}
+		if err := json.Unmarshal([]byte(autoTagsJSON), &t.AutoTags); err != nil {
+			t.AutoTags = []string{}
 		}
 		t.CreatedAt = parseTimestamp(createdAt)
 		t.UpdatedAt = parseTimestamp(updatedAt)
@@ -866,7 +1056,7 @@ func (s *SQLiteStore) GetTrendingEntries(ctx context.Context, teamID string, day
 func (s *SQLiteStore) GetWeakSignalEntries(ctx context.Context, teamID string, minRatings int, maxAvgOutcome float64) ([]KnowledgeEntry, error) {
 	const query = `
 		SELECT
-			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+			e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 			e.author, e.team, e.created_at, e.updated_at, e.version,
 			e.rating, e.usage_count, e.team_id, e.status
 		FROM entries e
@@ -987,7 +1177,7 @@ func (s *SQLiteStore) searchKeyword(ctx context.Context, teamID, query string, l
 	}
 
 	q := `
-		SELECT e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+		SELECT e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 		       e.author, e.team, e.created_at, e.updated_at, e.version,
 		       e.rating, e.usage_count, e.team_id, e.status,
 		       matchinfo(entries_fts, 'pcx') AS mi
@@ -1010,11 +1200,11 @@ func (s *SQLiteStore) searchKeyword(ctx context.Context, teamID, query string, l
 	var ranked_ []ranked
 	for rows.Next() {
 		var e KnowledgeEntry
-		var tagsJSON, createdAt, updatedAt string
+		var tagsJSON, autoTagsJSON, createdAt, updatedAt string
 		var mi []byte
 		if err := rows.Scan(
 			&e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-			&e.Domain, &tagsJSON, &e.Author, &e.Team,
+			&e.Domain, &tagsJSON, &autoTagsJSON, &e.Author, &e.Team,
 			&createdAt, &updatedAt, &e.Version,
 			&e.Rating, &e.UsageCount, &e.TeamID, &e.Status, &mi,
 		); err != nil {
@@ -1022,6 +1212,9 @@ func (s *SQLiteStore) searchKeyword(ctx context.Context, teamID, query string, l
 		}
 		if err2 := json.Unmarshal([]byte(tagsJSON), &e.Tags); err2 != nil {
 			e.Tags = []string{}
+		}
+		if err2 := json.Unmarshal([]byte(autoTagsJSON), &e.AutoTags); err2 != nil {
+			e.AutoTags = []string{}
 		}
 		e.CreatedAt = parseTimestamp(createdAt)
 		e.UpdatedAt = parseTimestamp(updatedAt)
@@ -1082,7 +1275,7 @@ func (s *SQLiteStore) searchHybridMerge(ctx context.Context, teamID, query strin
 
 	if fts != "" {
 		q := `
-			SELECT e.id, e.type, e.title, e.content, e.description, e.domain, e.tags,
+			SELECT e.id, e.type, e.title, e.content, e.description, e.domain, e.tags, e.auto_tags,
 			       e.author, e.team, e.created_at, e.updated_at, e.version,
 			       e.rating, e.usage_count, e.team_id, e.status,
 			       matchinfo(entries_fts, 'pcx') AS mi
@@ -1106,11 +1299,11 @@ func (s *SQLiteStore) searchHybridMerge(ctx context.Context, teamID, query strin
 		maxScore := 0.0
 		for rows.Next() {
 			var e KnowledgeEntry
-			var tagsJSON, createdAt, updatedAt string
+			var tagsJSON, autoTagsJSON, createdAt, updatedAt string
 			var mi []byte
 			if err := rows.Scan(
 				&e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-				&e.Domain, &tagsJSON, &e.Author, &e.Team,
+				&e.Domain, &tagsJSON, &autoTagsJSON, &e.Author, &e.Team,
 				&createdAt, &updatedAt, &e.Version,
 				&e.Rating, &e.UsageCount, &e.TeamID, &e.Status, &mi,
 			); err != nil {
@@ -1118,6 +1311,9 @@ func (s *SQLiteStore) searchHybridMerge(ctx context.Context, teamID, query strin
 			}
 			if err2 := json.Unmarshal([]byte(tagsJSON), &e.Tags); err2 != nil {
 				e.Tags = []string{}
+			}
+			if err2 := json.Unmarshal([]byte(autoTagsJSON), &e.AutoTags); err2 != nil {
+				e.AutoTags = []string{}
 			}
 			e.CreatedAt = parseTimestamp(createdAt)
 			e.UpdatedAt = parseTimestamp(updatedAt)
@@ -1206,11 +1402,12 @@ func (s *SQLiteStore) BulkImport(ctx context.Context, entries []KnowledgeEntry) 
 
 		entry.ID = uuid.NewString()
 		tagsJSON, _ := json.Marshal(entry.Tags)
+		autoTagsJSON, _ := json.Marshal(entry.AutoTags)
 		_, insertErr := tx.ExecContext(ctx, `
-			INSERT INTO entries (id, type, title, content, description, domain, tags, author, team, team_id, status)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO entries (id, type, title, content, description, domain, tags, auto_tags, author, team, team_id, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, entry.ID, string(entry.Type), entry.Title, entry.Content,
-			entry.Description, entry.Domain, string(tagsJSON),
+			entry.Description, entry.Domain, string(tagsJSON), string(autoTagsJSON),
 			entry.Author, entry.Team, entry.TeamID, statusOrDefaultSQLite(entry.Status),
 		)
 		if insertErr != nil {
@@ -1235,7 +1432,7 @@ func statusOrDefaultSQLite(s string) string {
 
 func (s *SQLiteStore) GetEntryByContentHash(ctx context.Context, hash string) (*KnowledgeEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries WHERE content_hash = ? LIMIT 1
 	`, hash)

@@ -86,7 +86,8 @@ func TestGetAgentByDomain(t *testing.T) {
 		t.Fatalf("setup UpsertAgent: %v", err)
 	}
 
-	got, err := s.GetAgentByDomain(ctx, "legal")
+	// Unscoped lookup (teamID="") — should find any matching agent.
+	got, err := s.GetAgentByDomain(ctx, "legal", "")
 	if err != nil {
 		t.Fatalf("GetAgentByDomain: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestGetAgentByDomain_NotFound(t *testing.T) {
 	s := newTestAgentStore(t)
 	ctx := context.Background()
 
-	got, err := s.GetAgentByDomain(ctx, "nonexistent")
+	got, err := s.GetAgentByDomain(ctx, "nonexistent", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestListAgents(t *testing.T) {
 		t.Fatalf("setup UpsertAgent (legal): %v", err)
 	}
 
-	agents, err := s.ListAgents(ctx)
+	agents, err := s.ListAgents(ctx, "")
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
@@ -182,11 +183,162 @@ func TestStoreAndListAgentVersions(t *testing.T) {
 
 func TestListAgents_Empty(t *testing.T) {
 	s := newTestAgentStore(t)
-	agents, err := s.ListAgents(context.Background())
+	agents, err := s.ListAgents(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListAgents on empty store: %v", err)
 	}
 	if len(agents) != 0 {
 		t.Errorf("want 0 agents, got %d", len(agents))
+	}
+}
+
+// TestUpsertAgentMultiTeamSameDomain proves that two teams with the same domain
+// produce two distinct agent rows (one per team), and that neither overwrites
+// the other. It also verifies the new (domain, team_id) uniqueness constraint
+// and the migrateAgentsTeamUnique rebuild migration (run implicitly by NewSQLiteStore).
+func TestUpsertAgentMultiTeamSameDomain(t *testing.T) {
+	s := newTestAgentStore(t)
+	ctx := context.Background()
+
+	// Two teams, same domain.
+	id1, err := s.UpsertAgent(ctx, Agent{
+		Domain:       "finance",
+		TeamID:       "team-A",
+		Version:      1,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "Team A finance agent",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent team-A: %v", err)
+	}
+
+	id2, err := s.UpsertAgent(ctx, Agent{
+		Domain:       "finance",
+		TeamID:       "team-B",
+		Version:      1,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "Team B finance agent",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent team-B: %v", err)
+	}
+
+	// IDs must be distinct.
+	if id1 == id2 {
+		t.Errorf("expected distinct IDs for different teams, both got %q", id1)
+	}
+
+	// Two rows total.
+	all, err := s.ListAgents(ctx, "")
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("want 2 agents, got %d", len(all))
+	}
+
+	// Each team's lookup returns its own agent.
+	aA, err := s.GetAgentByDomain(ctx, "finance", "team-A")
+	if err != nil {
+		t.Fatalf("GetAgentByDomain team-A: %v", err)
+	}
+	if aA == nil || aA.ID != id1 {
+		t.Errorf("team-A lookup: want id %q, got %v", id1, aA)
+	}
+	if aA.SystemPrompt != "Team A finance agent" {
+		t.Errorf("team-A system_prompt = %q, want 'Team A finance agent'", aA.SystemPrompt)
+	}
+
+	aB, err := s.GetAgentByDomain(ctx, "finance", "team-B")
+	if err != nil {
+		t.Fatalf("GetAgentByDomain team-B: %v", err)
+	}
+	if aB == nil || aB.ID != id2 {
+		t.Errorf("team-B lookup: want id %q, got %v", id2, aB)
+	}
+	if aB.SystemPrompt != "Team B finance agent" {
+		t.Errorf("team-B system_prompt = %q, want 'Team B finance agent'", aB.SystemPrompt)
+	}
+
+	// Upserting again for team-A updates ONLY team-A's row.
+	_, err = s.UpsertAgent(ctx, Agent{
+		ID:           id1,
+		Domain:       "finance",
+		TeamID:       "team-A",
+		Version:      2,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "Team A finance agent v2",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent team-A v2: %v", err)
+	}
+
+	aAv2, _ := s.GetAgentByDomain(ctx, "finance", "team-A")
+	if aAv2 == nil || aAv2.SystemPrompt != "Team A finance agent v2" {
+		t.Errorf("after update team-A prompt = %q, want v2", aAv2.SystemPrompt)
+	}
+
+	// team-B row is unchanged.
+	aBcheck, _ := s.GetAgentByDomain(ctx, "finance", "team-B")
+	if aBcheck == nil || aBcheck.SystemPrompt != "Team B finance agent" {
+		t.Errorf("team-B prompt should be unchanged, got %q", aBcheck.SystemPrompt)
+	}
+
+	// Still exactly 2 rows.
+	all2, _ := s.ListAgents(ctx, "")
+	if len(all2) != 2 {
+		t.Errorf("want 2 agents after update, got %d", len(all2))
+	}
+}
+
+// TestGetAgentByDomain_LegacyFallback verifies that a teamID-scoped lookup falls
+// back to a legacy row (team_id="") when no exact-team match exists.
+func TestGetAgentByDomain_LegacyFallback(t *testing.T) {
+	s := newTestAgentStore(t)
+	ctx := context.Background()
+
+	// Insert a legacy row (no team).
+	id, err := s.UpsertAgent(ctx, Agent{
+		Domain:       "ops",
+		TeamID:       "",
+		Version:      1,
+		Status:       AgentStatusPublished,
+		SystemPrompt: "Legacy ops agent",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent legacy: %v", err)
+	}
+
+	// A scoped lookup for an unknown team should fall back to the legacy row.
+	a, err := s.GetAgentByDomain(ctx, "ops", "new-team")
+	if err != nil {
+		t.Fatalf("GetAgentByDomain: %v", err)
+	}
+	if a == nil {
+		t.Fatal("expected legacy fallback agent, got nil")
+	}
+	if a.ID != id {
+		t.Errorf("fallback id = %q, want %q", a.ID, id)
+	}
+
+	// A scoped lookup for the same team after it registers its own agent returns
+	// the team-specific one, not the legacy one.
+	id2, err := s.UpsertAgent(ctx, Agent{
+		Domain:       "ops",
+		TeamID:       "new-team",
+		Version:      1,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "new-team ops agent",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent new-team: %v", err)
+	}
+
+	a2, err := s.GetAgentByDomain(ctx, "ops", "new-team")
+	if err != nil {
+		t.Fatalf("GetAgentByDomain new-team: %v", err)
+	}
+	if a2 == nil || a2.ID != id2 {
+		t.Errorf("after team-specific upsert: want id %q, got %v", id2, a2)
 	}
 }

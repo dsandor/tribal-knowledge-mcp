@@ -44,6 +44,15 @@ func InjectSuperadmin(ctx context.Context) context.Context {
 	return context.WithValue(ctx, contextKey{}, TeamContext{Role: "superadmin"})
 }
 
+// WithTestTeamContext returns a context carrying tc.
+// FOR TESTS ONLY. Unlike InjectSuperadmin (which hardcodes the superadmin
+// role for the dev-bypass middleware), this accepts an arbitrary TeamContext
+// and can mint any role or team identity — calling it from non-_test.go code
+// would bypass all team scoping.
+func WithTestTeamContext(ctx context.Context, tc TeamContext) context.Context {
+	return context.WithValue(ctx, contextKey{}, tc)
+}
+
 // AuthStore is the minimal storage interface needed by RequireAuth.
 type AuthStore interface {
 	GetAPIKeyByHash(ctx context.Context, hash string) (*storage.APIKey, error)
@@ -173,3 +182,11 @@ func RequireAdmin() func(http.Handler) http.Handler { return requireRole("admin"
 
 // RequireSuperadmin gates routes to superadmin only.
 func RequireSuperadmin() func(http.Handler) http.Handler { return requireRole("superadmin") }
+
+// CanAccess reports whether the caller may act on a resource owned by
+// resourceTeam. Superadmins, contexts without a team (dev bypass, stdio MCP),
+// and team-less legacy resources are always allowed.
+func CanAccess(tc TeamContext, resourceTeam string) bool {
+	return tc.Role == "superadmin" || tc.TeamID == "" || resourceTeam == "" ||
+		tc.TeamID == resourceTeam
+}

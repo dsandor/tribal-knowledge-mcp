@@ -22,6 +22,7 @@ type Agent struct {
 	AntiPatterns string
 	SourceRefs   []string
 	ClusterID    string
+	TeamID       string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -42,8 +43,15 @@ type AgentStore interface {
 	AnalysisStore
 	UpsertAgent(ctx context.Context, agent Agent) (string, error)
 	GetAgent(ctx context.Context, id string) (*Agent, error)
-	GetAgentByDomain(ctx context.Context, domain string) (*Agent, error)
-	ListAgents(ctx context.Context) ([]Agent, error)
+	// GetAgentByDomain looks up the latest agent for a domain, scoped by team.
+	//
+	// Lookup semantics:
+	//   - teamID non-empty: exact match on (domain, team_id) first; if not found,
+	//     falls back to a legacy row with team_id="" (visible-to-all policy).
+	//   - teamID empty: returns any matching agent regardless of team (dev / single-
+	//     tenant fallback; behaves like the old unscoped query).
+	GetAgentByDomain(ctx context.Context, domain, teamID string) (*Agent, error)
+	ListAgents(ctx context.Context, teamID string) ([]Agent, error)
 	PublishAgent(ctx context.Context, id string) error
 	StoreAgentVersion(ctx context.Context, version AgentVersion) error
 	ListAgentVersions(ctx context.Context, agentID string) ([]AgentVersion, error)

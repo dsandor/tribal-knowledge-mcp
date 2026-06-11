@@ -23,14 +23,41 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		// AnthropicAPIKey is a pointer so we can distinguish "not sent" (nil)
 		// from "explicitly cleared" (pointer to ""). When nil, the existing key
 		// stored in the DB is preserved.
-		AnthropicAPIKey *string `json:"anthropic_api_key"`
-		AnthropicModel  string  `json:"anthropic_model"`
-		OllamaURL       string  `json:"ollama_url"`
-		OllamaModel     string  `json:"ollama_model"`
+		AnthropicAPIKey *string                         `json:"anthropic_api_key"`
+		AnthropicModel  string                          `json:"anthropic_model"`
+		OllamaURL       string                          `json:"ollama_url"`
+		OllamaModel     string                          `json:"ollama_model"`
+		LLMProvider     string                          `json:"llm_provider"`
+		OllamaLLMModel  string                          `json:"ollama_llm_model"`
+		AITouchpoints   map[string]storage.AITouchpoint `json:"ai_touchpoints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad_request", "invalid JSON body")
 		return
+	}
+
+	// Validate llm_provider: only empty string, "anthropic", or "ollama" are allowed.
+	if body.LLMProvider != "" && body.LLMProvider != "anthropic" && body.LLMProvider != "ollama" {
+		writeError(w, 400, "bad_request", "llm_provider must be anthropic or ollama")
+		return
+	}
+
+	// Validate ai_touchpoints: only the four known keys and valid providers.
+	validTouchpoints := map[string]bool{
+		"analysis":    true,
+		"agents":      true,
+		"improvement": true,
+		"enrichment":  true,
+	}
+	for k, tp := range body.AITouchpoints {
+		if !validTouchpoints[k] {
+			writeError(w, 400, "bad_request", fmt.Sprintf("unknown ai touchpoint %q", k))
+			return
+		}
+		if tp.Provider != "" && tp.Provider != "anthropic" && tp.Provider != "ollama" {
+			writeError(w, 400, "bad_request", fmt.Sprintf("ai touchpoint %q: provider must be anthropic or ollama", k))
+			return
+		}
 	}
 
 	// Read existing settings so we can preserve the stored API key when the
@@ -46,6 +73,13 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		apiKey = *body.AnthropicAPIKey
 	}
 
+	// Nil ai_touchpoints body field → store empty map (full-replace semantics:
+	// the UI always sends the complete map; nil means no touchpoints configured).
+	aiTouchpoints := body.AITouchpoints
+	if aiTouchpoints == nil {
+		aiTouchpoints = map[string]storage.AITouchpoint{}
+	}
+
 	settings := storage.TeamSettings{
 		TeamID:             tc.TeamID,
 		Domains:            body.Domains,
@@ -56,6 +90,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		AnthropicModel:     body.AnthropicModel,
 		OllamaURL:          body.OllamaURL,
 		OllamaModel:        body.OllamaModel,
+		LLMProvider:        body.LLMProvider,
+		OllamaLLMModel:     body.OllamaLLMModel,
+		AITouchpoints:      aiTouchpoints,
 	}
 	if settings.ClusterThreshold == 0 {
 		settings.ClusterThreshold = 0.85

@@ -36,3 +36,22 @@ func (p *Provider) Client(apiKey, model string) Client {
 	p.cache[key] = c
 	return c
 }
+
+// Ollama returns a cached OllamaClient for the given (url, model) pair.
+// Returns nil when url or model is empty (Ollama LLM not configured).
+func (p *Provider) Ollama(url, model string) Client {
+	if url == "" || model == "" {
+		return nil
+	}
+	key := "ollama|" + url + "|" + model
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if c, ok := p.cache[key]; ok {
+		return c
+	}
+	c := NewOllamaClient(url, model)
+	p.cache[key] = c
+	return c
+}

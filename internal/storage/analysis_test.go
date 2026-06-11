@@ -38,7 +38,7 @@ func TestCountEntries(t *testing.T) {
 	ctx := context.Background()
 	store := newAnalysisStore(t)
 
-	count, err := store.CountEntries(ctx)
+	count, err := store.CountEntries(ctx, "")
 	if err != nil {
 		t.Fatalf("CountEntries: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestCountEntries(t *testing.T) {
 		t.Fatalf("StoreEntry: %v", err)
 	}
 
-	count, err = store.CountEntries(ctx)
+	count, err = store.CountEntries(ctx, "")
 	if err != nil {
 		t.Fatalf("CountEntries after insert: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestGetAllEmbeddings(t *testing.T) {
 		t.Fatalf("StoreEntry: %v", err)
 	}
 
-	embeddings, err := store.GetAllEmbeddings(ctx)
+	embeddings, err := store.GetAllEmbeddings(ctx, "")
 	if err != nil {
 		t.Fatalf("GetAllEmbeddings: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestGetAllEmbeddings_DeletedEntryAbsent(t *testing.T) {
 		t.Fatalf("DeleteEntry: %v", err)
 	}
 
-	embeddings, err := store.GetAllEmbeddings(ctx)
+	embeddings, err := store.GetAllEmbeddings(ctx, "")
 	if err != nil {
 		t.Fatalf("GetAllEmbeddings: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestStoreAndListClusters(t *testing.T) {
 		t.Fatal("StoreCluster returned empty ID")
 	}
 
-	clusters, err := store.ListClusters(ctx)
+	clusters, err := store.ListClusters(ctx, "")
 	if err != nil {
 		t.Fatalf("ListClusters: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestPipelineRun(t *testing.T) {
 	ctx := context.Background()
 	store := newAnalysisStore(t)
 
-	runID, err := store.StartPipelineRun(ctx, "manual")
+	runID, err := store.StartPipelineRun(ctx, "manual", "")
 	if err != nil {
 		t.Fatalf("StartPipelineRun: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestPipelineRun(t *testing.T) {
 		t.Fatal("StartPipelineRun returned empty ID")
 	}
 
-	run, err := store.GetLatestPipelineRun(ctx)
+	run, err := store.GetLatestPipelineRun(ctx, "")
 	if err != nil {
 		t.Fatalf("GetLatestPipelineRun: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestPipelineRun(t *testing.T) {
 		t.Fatalf("FinishPipelineRun: %v", err)
 	}
 
-	run, err = store.GetLatestPipelineRun(ctx)
+	run, err = store.GetLatestPipelineRun(ctx, "")
 	if err != nil {
 		t.Fatalf("GetLatestPipelineRun after finish: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestStoreAndGetSnapshot(t *testing.T) {
 		t.Fatal("StoreSnapshot returned empty ID")
 	}
 
-	got, err := store.GetLatestSnapshot(ctx)
+	got, err := store.GetLatestSnapshot(ctx, "")
 	if err != nil {
 		t.Fatalf("GetLatestSnapshot: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestGetLatestPipelineRun_Empty(t *testing.T) {
 	ctx := context.Background()
 	store := newAnalysisStore(t)
 
-	run, err := store.GetLatestPipelineRun(ctx)
+	run, err := store.GetLatestPipelineRun(ctx, "")
 	if err != nil {
 		t.Fatalf("GetLatestPipelineRun on empty DB: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestGetLatestSnapshot_Empty(t *testing.T) {
 	ctx := context.Background()
 	store := newAnalysisStore(t)
 
-	snap, err := store.GetLatestSnapshot(ctx)
+	snap, err := store.GetLatestSnapshot(ctx, "")
 	if err != nil {
 		t.Fatalf("GetLatestSnapshot on empty DB: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestListSnapshots(t *testing.T) {
 		}
 	}
 
-	snaps, err := s.ListSnapshots(ctx)
+	snaps, err := s.ListSnapshots(ctx, "")
 	if err != nil {
 		t.Fatalf("ListSnapshots: %v", err)
 	}

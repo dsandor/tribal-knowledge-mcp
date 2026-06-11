@@ -10,6 +10,7 @@ import (
 
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
+	tagspkg "github.com/dsandor/memory/internal/tags"
 )
 
 // importEntry is the JSON shape for a single entry in the bulk-import request body.
@@ -81,7 +82,7 @@ func (s *Server) handleKnowledgeImport(w http.ResponseWriter, r *http.Request) {
 		if domain == "" {
 			domain = "general"
 		}
-		tags := re.Tags
+		tags := tagspkg.Merge(re.Tags, tagspkg.ExtractHashtags(re.Title+" "+re.Content))
 		if tags == nil {
 			tags = []string{}
 		}

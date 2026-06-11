@@ -41,6 +41,7 @@ export interface KnowledgeEntry {
   Description: string
   Domain: string
   Tags: string[] | null | undefined
+  AutoTags: string[] | null | undefined
   Author: string
   Team: string
   CreatedAt: string
@@ -164,7 +165,7 @@ export const api = {
   stats: (): Promise<Stats> => get('/stats'),
 
   knowledge: {
-    list: (params: { limit?: number; offset?: number; domain?: string; type?: string; search?: string; mode?: 'hybrid' | 'semantic' | 'keyword' } = {}): Promise<KnowledgeEntry[]> => {
+    list: (params: { limit?: number; offset?: number; domain?: string; type?: string; search?: string; mode?: 'hybrid' | 'semantic' | 'keyword'; tag?: string } = {}): Promise<KnowledgeEntry[]> => {
       const q = new URLSearchParams()
       if (params.limit != null) q.set('limit', String(params.limit))
       if (params.offset != null) q.set('offset', String(params.offset))
@@ -174,6 +175,7 @@ export const api = {
         q.set('search', params.search)
         if (params.search !== '') q.set('mode', params.mode ?? 'hybrid')
       }
+      if (params.tag) q.set('tag', params.tag)
       return get(`/knowledge?${q}`)
     },
     get: (id: string): Promise<KnowledgeEntry> => get(`/knowledge/${id}`),
@@ -279,12 +281,20 @@ export interface AIFieldValue {
   source: 'saved' | 'env' | 'none';
 }
 
+export interface AITouchpoint {
+  provider: string;
+  model: string;
+}
+
 export interface AISettings {
   anthropic_api_key: AIFieldValue;
   anthropic_model: AIFieldValue;
   agent_model: AIFieldValue;
   ollama_url: AIFieldValue;
   ollama_model: AIFieldValue;
+  llm_provider: AIFieldValue;
+  ollama_llm_model: AIFieldValue;
+  ai_touchpoints?: Record<string, AITouchpoint>;
 }
 
 export interface ModelOption {

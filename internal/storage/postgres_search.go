@@ -63,7 +63,7 @@ func (s *PostgresStore) pgSearchKeyword(ctx context.Context, teamID, query strin
 
 	args := []any{query, teamID, teamID, limit}
 	q := `
-		SELECT id, type, title, content, description, domain, tags, author, team,
+		SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		       created_at, updated_at, version, rating, usage_count, team_id, status
 		FROM entries
 		WHERE fts_vector @@ plainto_tsquery('english', $1)
@@ -121,7 +121,7 @@ func (s *PostgresStore) pgSearchHybridMerge(ctx context.Context, teamID, query s
 	// Keyword leg.
 	if strings.TrimSpace(query) != "" {
 		q := `
-			SELECT id, type, title, content, description, domain, tags, author, team,
+			SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 			       created_at, updated_at, version, rating, usage_count, team_id, status,
 			       ts_rank(fts_vector, plainto_tsquery('english', $1)) AS rank
 			FROM entries
@@ -202,7 +202,7 @@ func (s *PostgresStore) pgSearchHybridMerge(ctx context.Context, teamID, query s
 				placeholders[i] = fmt.Sprintf("$%d", i+1)
 			}
 			rows2, err := s.db.QueryContext(ctx,
-				fmt.Sprintf(`SELECT id, type, title, content, description, domain, tags, author, team,
+				fmt.Sprintf(`SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 				       created_at, updated_at, version, rating, usage_count, team_id, status
 				FROM entries WHERE id IN (%s)`, strings.Join(placeholders, ",")),
 				idArgs...,
@@ -263,16 +263,17 @@ func (s *PostgresStore) pgSearchHybridMerge(ctx context.Context, teamID, query s
 	return out, nil
 }
 
-// scanEntryPGWithRank scans a row with the standard 16 entry columns followed by a ts_rank float.
+// scanEntryPGWithRank scans a row with the standard 17 entry columns followed by a ts_rank float.
 func scanEntryPGWithRank(row rowScanner) (*KnowledgeEntry, float64, error) {
 	var e KnowledgeEntry
 	var tagsRaw []byte
+	var autoTagsRaw []byte
 	var createdAt, updatedAt time.Time
 	var rank float64
 
 	err := row.Scan(
 		&e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-		&e.Domain, &tagsRaw, &e.Author, &e.Team,
+		&e.Domain, &tagsRaw, &autoTagsRaw, &e.Author, &e.Team,
 		&createdAt, &updatedAt, &e.Version,
 		&e.Rating, &e.UsageCount, &e.TeamID, &e.Status, &rank,
 	)
@@ -281,6 +282,9 @@ func scanEntryPGWithRank(row rowScanner) (*KnowledgeEntry, float64, error) {
 	}
 	if err := json.Unmarshal(tagsRaw, &e.Tags); err != nil {
 		e.Tags = []string{}
+	}
+	if err := json.Unmarshal(autoTagsRaw, &e.AutoTags); err != nil {
+		e.AutoTags = []string{}
 	}
 	e.CreatedAt = createdAt
 	e.UpdatedAt = updatedAt
