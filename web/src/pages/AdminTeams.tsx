@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchTeams, createTeam, updateTeam, setTeamEnabled } from '../lib/api';
+import { fetchTeams, createTeam, updateTeam, setTeamEnabled, deleteTeam, type TeamDataCounts } from '../lib/api';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -20,10 +20,55 @@ import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import Alert from '@mui/material/Alert';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogTitle from '@mui/material/DialogTitle';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
+import { Trash2 } from 'lucide-react';
 
 interface Team { id: string; name: string; domain_patterns: string[]; enabled: boolean; }
 
 interface EditState { name: string; patterns: string; }
+
+type DeleteMode = 'confirm' | 'migrate';
+
+interface DeleteDialogState {
+  open: boolean;
+  team: Team | null;
+  mode: DeleteMode;
+  counts: TeamDataCounts | null;
+  migrateTarget: string;
+  error: string | null;
+  busy: boolean;
+  summary: Record<string, number> | null;
+}
+
+const EMPTY_DELETE_STATE: DeleteDialogState = {
+  open: false,
+  team: null,
+  mode: 'confirm',
+  counts: null,
+  migrateTarget: '',
+  error: null,
+  busy: false,
+  summary: null,
+};
+
+function formatCounts(counts: TeamDataCounts): string {
+  const parts: string[] = [];
+  if (counts.users > 0) parts.push(`${counts.users} user${counts.users !== 1 ? 's' : ''}`);
+  if (counts.api_keys > 0) parts.push(`${counts.api_keys} API key${counts.api_keys !== 1 ? 's' : ''}`);
+  if (counts.entries > 0) parts.push(`${counts.entries} entr${counts.entries !== 1 ? 'ies' : 'y'}`);
+  if (counts.clusters > 0) parts.push(`${counts.clusters} cluster${counts.clusters !== 1 ? 's' : ''}`);
+  if (counts.agents > 0) parts.push(`${counts.agents} agent${counts.agents !== 1 ? 's' : ''}`);
+  if (counts.rules > 0) parts.push(`${counts.rules} rule${counts.rules !== 1 ? 's' : ''}`);
+  return parts.join(', ');
+}
 
 export default function AdminTeams() {
   const [teams, setTeams] = useState<Team[]>([]);
@@ -35,6 +80,7 @@ export default function AdminTeams() {
   const [editState, setEditState] = useState<EditState>({ name: '', patterns: '' });
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(EMPTY_DELETE_STATE);
 
   const load = () => {
     fetchTeams().then((data: unknown) => {
@@ -96,6 +142,56 @@ export default function AdminTeams() {
       setSavingId(null);
     }
   };
+
+  const openDeleteDialog = (t: Team) => {
+    setDeleteDialog({ ...EMPTY_DELETE_STATE, open: true, team: t });
+  };
+
+  const closeDeleteDialog = () => {
+    setDeleteDialog(EMPTY_DELETE_STATE);
+  };
+
+  const handleDeleteConfirm = async () => {
+    const { team } = deleteDialog;
+    if (!team) return;
+    setDeleteDialog(s => ({ ...s, busy: true, error: null }));
+    try {
+      const result = await deleteTeam(team.id);
+      if (result.needsMigration && result.counts) {
+        setDeleteDialog(s => ({ ...s, busy: false, mode: 'migrate', counts: result.counts! }));
+      } else {
+        closeDeleteDialog();
+        load();
+      }
+    } catch (e) {
+      setDeleteDialog(s => ({ ...s, busy: false, error: e instanceof Error ? e.message : 'Delete failed.' }));
+    }
+  };
+
+  const handleMigrateConfirm = async () => {
+    const { team, migrateTarget } = deleteDialog;
+    if (!team || !migrateTarget) return;
+    setDeleteDialog(s => ({ ...s, busy: true, error: null }));
+    try {
+      const result = await deleteTeam(team.id, migrateTarget);
+      if (result.ok) {
+        const skipped = result.summary?.agents_skipped ?? 0;
+        closeDeleteDialog();
+        load();
+        if (skipped > 0) {
+          // Surface agents_skipped as a page-level note after close
+          setError(`${skipped} agent${skipped !== 1 ? 's' : ''} skipped — domain already exists in target.`);
+        }
+      } else {
+        setDeleteDialog(s => ({ ...s, busy: false, error: 'Migration failed.' }));
+      }
+    } catch (e) {
+      setDeleteDialog(s => ({ ...s, busy: false, error: e instanceof Error ? e.message : 'Migration failed.' }));
+    }
+  };
+
+  const otherTeams = teams.filter(t => t.id !== deleteDialog.team?.id);
+  const migrateTargetTeam = otherTeams.find(t => t.id === deleteDialog.migrateTarget);
 
   if (loading) {
     return (
@@ -220,6 +316,14 @@ export default function AdminTeams() {
                           >
                             {t.enabled ? 'Disable' : 'Enable'}
                           </Button>
+                          <IconButton
+                            size="small"
+                            onClick={() => openDeleteDialog(t)}
+                            sx={{ color: 'error.main' }}
+                            title="Delete team"
+                          >
+                            <Trash2 style={{ width: 16, height: 16 }} />
+                          </IconButton>
                         </>
                       )}
                     </Box>
@@ -230,6 +334,68 @@ export default function AdminTeams() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Delete / Migration dialog */}
+      <Dialog open={deleteDialog.open} onClose={deleteDialog.busy ? undefined : closeDeleteDialog} maxWidth="sm" fullWidth>
+        {deleteDialog.mode === 'confirm' ? (
+          <>
+            <DialogTitle>Delete team</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                Delete team <strong>{deleteDialog.team?.name}</strong>? This cannot be undone.
+              </DialogContentText>
+              {deleteDialog.error && (
+                <Alert severity="error" sx={{ mt: 2 }}>{deleteDialog.error}</Alert>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={closeDeleteDialog} disabled={deleteDialog.busy}>Cancel</Button>
+              <Button color="error" variant="contained" onClick={handleDeleteConfirm} disabled={deleteDialog.busy}>
+                {deleteDialog.busy ? 'Checking...' : 'Delete'}
+              </Button>
+            </DialogActions>
+          </>
+        ) : (
+          <>
+            <DialogTitle>Migrate data before deleting</DialogTitle>
+            <DialogContent>
+              <DialogContentText sx={{ mb: 2 }}>
+                <strong>{deleteDialog.team?.name}</strong> contains data that must be migrated before deletion:{' '}
+                {deleteDialog.counts ? formatCounts(deleteDialog.counts) : ''}.
+              </DialogContentText>
+              <FormControl fullWidth size="small">
+                <InputLabel>Migrate data to</InputLabel>
+                <Select
+                  label="Migrate data to"
+                  value={deleteDialog.migrateTarget}
+                  onChange={e => setDeleteDialog(s => ({ ...s, migrateTarget: e.target.value }))}
+                  disabled={deleteDialog.busy}
+                >
+                  {otherTeams.map(ot => (
+                    <MenuItem key={ot.id} value={ot.id}>{ot.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {deleteDialog.error && (
+                <Alert severity="error" sx={{ mt: 2 }}>{deleteDialog.error}</Alert>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={closeDeleteDialog} disabled={deleteDialog.busy}>Cancel</Button>
+              <Button
+                color="error"
+                variant="contained"
+                onClick={handleMigrateConfirm}
+                disabled={deleteDialog.busy || !deleteDialog.migrateTarget}
+              >
+                {deleteDialog.busy
+                  ? 'Migrating...'
+                  : `Move data to ${migrateTargetTeam?.name ?? '…'} and delete`}
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
     </Box>
   );
 }

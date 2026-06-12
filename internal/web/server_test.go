@@ -190,6 +190,12 @@ func (m *mockStore) SetTeamEnabled(_ context.Context, id string, enabled bool) e
 }
 func (m *mockStore) UpdateTeam(_ context.Context, _ string, _ string, _ []string) error { return nil }
 func (m *mockStore) DeleteTeam(_ context.Context, id string) error                      { return nil }
+func (m *mockStore) TeamDataCounts(_ context.Context, _ string) (storage.TeamDataCounts, error) {
+	return storage.TeamDataCounts{}, nil
+}
+func (m *mockStore) DeleteTeamMigrate(_ context.Context, _, _ string) (storage.TeamMigrationSummary, error) {
+	return storage.TeamMigrationSummary{}, nil
+}
 func (m *mockStore) UpsertUser(_ context.Context, u storage.User) (string, error) {
 	return "", nil
 }

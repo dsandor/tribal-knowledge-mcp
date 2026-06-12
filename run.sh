@@ -30,12 +30,22 @@ POSTGRES_DB="${POSTGRES_DB:-memory}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 DB_DIR="${DB_DIR:-${SCRIPT_DIR}/db}"
 
+# Load local overrides from .env if present (gitignored; see .env.example).
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "${SCRIPT_DIR}/.env"
+    set +a
+fi
+
 # Server settings — override from env or MCP env block
 LOG_LEVEL="${LOG_LEVEL:-info}"
 HTTP_ADDR="${HTTP_ADDR:-:8080}"
 DEV_BYPASS_AUTH="${DEV_BYPASS_AUTH:-false}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-nomic-embed-text}"
+LLM_PROVIDER="${LLM_PROVIDER:-}"
+OLLAMA_LLM_MODEL="${OLLAMA_LLM_MODEL:-}"
 
 # ── Ensure Docker is available ───────────────────────────────────────────────
 if ! command -v docker &>/dev/null; then
@@ -87,6 +97,8 @@ export LOG_LEVEL
 export DEV_BYPASS_AUTH
 export OLLAMA_URL
 export OLLAMA_MODEL
+export LLM_PROVIDER
+export OLLAMA_LLM_MODEL
 export CGO_ENABLED=1
 
 # ANTHROPIC_API_KEY, SUPERADMIN_KEY, AGENT_MODEL, ANTHROPIC_MODEL,

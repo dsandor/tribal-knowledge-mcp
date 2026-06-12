@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,16 @@ import (
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
 )
+
+// isNotFound reports whether err wraps storage.ErrNotFound.
+func isNotFound(err error) bool {
+	return errors.Is(err, storage.ErrNotFound)
+}
+
+// isBadTarget reports whether err wraps storage.ErrBadTarget.
+func isBadTarget(err error) bool {
+	return errors.Is(err, storage.ErrBadTarget)
+}
 
 func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	teams, err := s.store.ListTeams(r.Context())
@@ -93,11 +104,61 @@ func (s *Server) handleSetTeamEnabled(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteTeam(r.Context(), chi.URLParam(r, "id")); err != nil {
-		writeError(w, 500, "internal_error", fmt.Sprintf("delete team: %v", err))
+	id := chi.URLParam(r, "id")
+	target := r.URL.Query().Get("migrate_to")
+
+	if target == "" {
+		// No migration: check if team has data first.
+		counts, err := s.store.TeamDataCounts(r.Context(), id)
+		if err != nil {
+			if isNotFound(err) {
+				writeError(w, 404, "not_found", "team not found")
+				return
+			}
+			writeError(w, 500, "internal_error", fmt.Sprintf("team data counts: %v", err))
+			return
+		}
+		if counts != (storage.TeamDataCounts{}) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":  "team_not_empty",
+				"counts": counts,
+			})
+			return
+		}
+		// Team is empty — proceed with plain delete.
+		if err := s.store.DeleteTeam(r.Context(), id); err != nil {
+			if isNotFound(err) {
+				writeError(w, 404, "not_found", "team not found")
+				return
+			}
+			writeError(w, 500, "internal_error", fmt.Sprintf("delete team: %v", err))
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true})
+
+	// migrate_to is set.
+	if target == id {
+		writeError(w, 400, "bad_request", "migrate_to must be a different team")
+		return
+	}
+	summary, err := s.store.DeleteTeamMigrate(r.Context(), id, target)
+	if err != nil {
+		if isNotFound(err) {
+			writeError(w, 404, "not_found", "team not found")
+			return
+		}
+		if isBadTarget(err) {
+			writeError(w, 400, "bad_request", fmt.Sprintf("target team not found: %v", err))
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("migrate team: %v", err))
+		return
+	}
+	writeJSON(w, summary)
 }
 
 func (s *Server) handleListTeamUsers(w http.ResponseWriter, r *http.Request) {

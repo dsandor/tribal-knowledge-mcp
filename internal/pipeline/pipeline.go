@@ -213,6 +213,8 @@ func (p *Pipeline) Run(ctx context.Context, trigger string) error {
 // For interval triggers, the team is skipped (no run row) when its entry count
 // is below Config.MinEntries. Manual triggers bypass this gate.
 func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error {
+	runStart := time.Now()
+
 	// Per-team interval gate: skip (no run row) when below threshold.
 	if trigger == "interval" {
 		count, err := p.store.CountEntries(ctx, teamID)
@@ -229,7 +231,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 	// effect immediately without a server restart.
 	analysisLLM := p.src.AnalysisLLM(ctx, teamID)
 	if analysisLLM == nil {
-		slog.Info("pipeline skipped: no effective anthropic key", "team", teamID, "trigger", trigger)
+		slog.Info("pipeline skipped: no LLM configured", "team", teamID, "trigger", trigger)
 		return nil
 	}
 	agentLLM := p.src.AgentLLM(ctx, teamID)
@@ -239,6 +241,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 	// agent-generation cache.
 	analysisFingerprint := p.src.LLMFingerprint(ctx, teamID, "analysis")
 	agentsFingerprint := p.src.LLMFingerprint(ctx, teamID, "agents")
+	improvementFingerprint := p.src.LLMFingerprint(ctx, teamID, "improvement")
 
 	prevRun, _ := p.store.GetLatestPipelineRun(ctx, teamID)
 	var prevRunID string
@@ -256,17 +259,39 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 	var runErrs []string
 	clustersFound := 0
 
+	// logFinish emits the "pipeline run finished" line then calls FinishPipelineRun.
+	// It must be called at every exit path after runID is established.
+	logFinish := func(status string) error {
+		slog.Info("pipeline run finished",
+			"team", teamID,
+			"status", status,
+			"duration_ms", time.Since(runStart).Milliseconds(),
+			"clusters", clustersFound,
+			"errors", len(runErrs),
+		)
+		return p.store.FinishPipelineRun(finishCtx, runID, status, len(runErrs), clustersFound, runErrs)
+	}
+
 	entries, err := p.store.ListEntries(ctx, storage.ListFilter{TeamID: teamID, Limit: -1})
 	if err != nil {
 		runErrs = append(runErrs, fmt.Sprintf("list entries: %v", err))
-		_ = p.store.FinishPipelineRun(finishCtx, runID, "failed", 0, 0, runErrs)
+		_ = logFinish("failed")
 		return fmt.Errorf("list entries: %w", err)
 	}
+
+	slog.Info("pipeline run started",
+		"team", teamID,
+		"trigger", trigger,
+		"entries", len(entries),
+		"analysis_llm", analysisFingerprint,
+		"agents_llm", agentsFingerprint,
+		"improvement_llm", improvementFingerprint,
+	)
 
 	embeddings, err := p.store.GetAllEmbeddings(ctx, teamID)
 	if err != nil {
 		runErrs = append(runErrs, fmt.Sprintf("get embeddings: %v", err))
-		_ = p.store.FinishPipelineRun(finishCtx, runID, "failed", len(entries), 0, runErrs)
+		_ = logFinish("failed")
 		return fmt.Errorf("get embeddings: %w", err)
 	}
 
@@ -291,14 +316,17 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 
 		summary, err := p.cachedSummarizeCluster(ctx, analysisLLM, clusterEntries, analysisFingerprint, teamID)
 		if err != nil {
+			slog.Warn("pipeline stage error", "stage", "summarize", "team", teamID, "err", err)
 			runErrs = append(runErrs, fmt.Sprintf("summarize cluster: %v", err))
 			continue
 		}
 
 		var totalScore float64
 		for _, e := range clusterEntries {
-			if score, err := p.cachedScoreEntry(ctx, analysisLLM, e, teamID); err == nil {
+			if score, scoreErr := p.cachedScoreEntry(ctx, analysisLLM, e, teamID); scoreErr == nil {
 				totalScore += score.Total
+			} else {
+				slog.Warn("pipeline stage error", "stage", "score", "team", teamID, "err", scoreErr)
 			}
 		}
 		avgScore := 0.0
@@ -317,6 +345,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 		}
 		clusterID, err := p.store.StoreCluster(ctx, cluster)
 		if err != nil {
+			slog.Warn("pipeline stage error", "stage", "cluster", "team", teamID, "err", err)
 			runErrs = append(runErrs, fmt.Sprintf("store cluster: %v", err))
 			continue
 		}
@@ -325,6 +354,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 
 		if p.agentStore != nil && agentLLM != nil {
 			if err := p.generateAgent(ctx, agentLLM, cluster, clusterEntries, agentsFingerprint, teamID); err != nil {
+				slog.Warn("pipeline stage error", "stage", "agent_gen", "team", teamID, "err", err)
 				runErrs = append(runErrs, fmt.Sprintf("generate agent for %s: %v", cand.Domain, err))
 			}
 		}
@@ -338,6 +368,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 
 	gaps, err := DetectGaps(ctx, analysisLLM, domainCounts)
 	if err != nil {
+		slog.Warn("pipeline stage error", "stage", "gaps", "team", teamID, "err", err)
 		runErrs = append(runErrs, fmt.Sprintf("detect gaps: %v", err))
 		gaps = nil
 	}
@@ -355,7 +386,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 	latest, err := p.store.GetLatestSnapshot(ctx, teamID)
 	if err != nil {
 		runErrs = append(runErrs, fmt.Sprintf("get latest snapshot: %v", err))
-		_ = p.store.FinishPipelineRun(finishCtx, runID, "failed", len(entries), clustersFound, runErrs)
+		_ = logFinish("failed")
 		return fmt.Errorf("get latest snapshot: %w", err)
 	}
 	version := 1
@@ -384,7 +415,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 	if len(runErrs) > 0 {
 		status = "complete_with_errors"
 	}
-	finishErr := p.store.FinishPipelineRun(finishCtx, runID, status, len(entries), clustersFound, runErrs)
+	finishErr := logFinish(status)
 
 	// Publish pipeline_complete live event (best-effort, nil-safe).
 	p.publishPipelineEvent(live.LiveEvent{
@@ -407,7 +438,7 @@ func (p *Pipeline) runForTeam(ctx context.Context, trigger, teamID string) error
 func (p *Pipeline) runWeakSignalImprovement(ctx context.Context, improvementLLM llm.Client, teamID string) {
 	weak, err := p.store.GetWeakSignalEntries(ctx, teamID, 3, 2.5)
 	if err != nil {
-		slog.Error("weak signal improvement: get entries", "err", err)
+		slog.Warn("pipeline stage error", "stage", "weak_signal", "team", teamID, "err", err)
 		return
 	}
 	if len(weak) == 0 {
@@ -421,7 +452,7 @@ func (p *Pipeline) runWeakSignalImprovement(ctx context.Context, improvementLLM 
 
 	for _, entry := range weak {
 		if err := p.improveEntry(ctx, improvementLLM, entry); err != nil {
-			slog.Error("weak signal improvement: improve entry", "id", entry.ID, "err", err)
+			slog.Warn("pipeline stage error", "stage", "weak_signal", "team", teamID, "err", err, "id", entry.ID)
 			// continue to next entry on failure
 		}
 	}
@@ -435,7 +466,7 @@ const autoTagBackfillCap = 20
 func (p *Pipeline) runAutoTagBackfill(ctx context.Context, improvementLLM llm.Client, teamID string) {
 	entries, err := p.store.ListEntries(ctx, storage.ListFilter{TeamID: teamID, Limit: 500})
 	if err != nil {
-		slog.Error("autotag backfill: list entries", "err", err)
+		slog.Warn("pipeline stage error", "stage", "autotag", "team", teamID, "err", err)
 		return
 	}
 	tagger := &tags.AutoTagger{

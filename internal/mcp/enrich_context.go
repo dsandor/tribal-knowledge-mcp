@@ -29,7 +29,7 @@ func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconf
 			mcplib.WithString("category", mcplib.Description("Domain/category for scoping rules and knowledge search")),
 			mcplib.WithString("user", mcplib.Description("User identifier for user-scoped rules")),
 		),
-		HandleEnrichContext(store, src, bus),
+		logTool("enrich_context", HandleEnrichContext(store, src, bus)),
 	)
 }
 

@@ -401,6 +401,23 @@ export async function setTeamEnabled(id: string, enabled: boolean) {
   return r.json();
 }
 
+export interface TeamDataCounts { users: number; api_keys: number; entries: number; clusters: number; agents: number; rules: number }
+export interface TeamDeleteResult { ok?: boolean; needsMigration?: boolean; counts?: TeamDataCounts; summary?: Record<string, number> }
+
+export async function deleteTeam(id: string, migrateTo?: string): Promise<TeamDeleteResult> {
+  const q = migrateTo ? `?migrate_to=${encodeURIComponent(migrateTo)}` : ''
+  const r = await apiFetch(`/api/admin/teams/${id}${q}`, { method: 'DELETE' })
+  if (r.status === 409) {
+    const body = await r.json()
+    return { needsMigration: true, counts: body.counts }
+  }
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error((err as { message?: string }).message ?? 'delete team failed')
+  }
+  return { ok: true, summary: await r.json().catch(() => undefined) }
+}
+
 // --- Admin: auth config ---
 export async function fetchAuthConfig() {
   const r = await apiFetch('/api/admin/auth-config');

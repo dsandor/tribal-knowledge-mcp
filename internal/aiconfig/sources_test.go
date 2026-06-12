@@ -1,7 +1,10 @@
 package aiconfig
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/dsandor/memory/internal/llm"
@@ -260,5 +263,110 @@ func TestLLMFingerprintPerTouchpoint(t *testing.T) {
 	wantAnalysis := "anthropic|claude-x"
 	if analysisFP != wantAnalysis {
 		t.Fatalf("analysis fingerprint = %q, want %q", analysisFP, wantAnalysis)
+	}
+}
+
+// recordingClient is a fake llm.Client that records Complete calls.
+type recordingClient struct {
+	calls []string
+}
+
+func (r *recordingClient) Complete(ctx context.Context, prompt string) (string, error) {
+	r.calls = append(r.calls, prompt)
+	return "recorded", nil
+}
+
+// recordingLLMProvider returns a *recordingClient so we can verify passthrough.
+type recordingLLMProvider struct {
+	client *recordingClient
+}
+
+func (r *recordingLLMProvider) Client(apiKey, model string) llm.Client {
+	if apiKey == "" {
+		return nil
+	}
+	return r.client
+}
+
+func (r *recordingLLMProvider) Ollama(url, model string) llm.Client {
+	if url == "" || model == "" {
+		return nil
+	}
+	return r.client
+}
+
+// TestLLMForTouchpointWrapsWithLogging: resolved client is NOT the raw *recordingClient
+// (it's wrapped in a LoggingClient) but Complete passes through to it.
+func TestLLMForTouchpointWrapsWithLogging(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rec := &recordingClient{}
+	p := &recordingLLMProvider{client: rec}
+	src := &Sources{
+		Resolver: NewResolver(&fakeSettingsStore{}, EnvDefaults{AnthropicAPIKey: "k", AnthropicModel: "claude-x"}),
+		LLM:      p,
+	}
+
+	c := src.LLMForTouchpoint(context.Background(), "t1", TouchpointAnalysis)
+	if c == nil {
+		t.Fatal("expected non-nil client")
+	}
+	// The returned client must NOT be the raw recording client — it should be wrapped.
+	if _, isRaw := c.(*recordingClient); isRaw {
+		t.Fatal("expected wrapped client, got raw *recordingClient (wrapping not applied)")
+	}
+
+	// But Complete must pass through to the inner recording client.
+	out, err := c.Complete(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "recorded" {
+		t.Fatalf("got %q, want 'recorded'", out)
+	}
+	if len(rec.calls) != 1 || rec.calls[0] != "hello" {
+		t.Fatalf("inner client calls = %v, want ['hello']", rec.calls)
+	}
+
+	// A Debug log line should have been emitted for the successful call.
+	log := buf.String()
+	if !strings.Contains(log, "llm call") {
+		t.Errorf("expected 'llm call' in log, got: %s", log)
+	}
+}
+
+// TestLLMUnconfiguredWarns: ollama selected but no model → returns UNTYPED nil
+// (c == nil must be true for the llm.Client interface value!) and captured log
+// contains "llm unconfigured" with touchpoint+team.
+func TestLLMUnconfiguredWarns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// Ollama provider but no chat model → provider returns nil.
+	saved := &storage.TeamSettings{LLMProvider: "ollama", OllamaURL: "http://o"} // OllamaLLMModel intentionally empty
+	src, _ := newTestSources(saved, EnvDefaults{AnthropicAPIKey: "k"})
+
+	c := src.LLMForTouchpoint(context.Background(), "t1", TouchpointAnalysis)
+	// CRITICAL: must be untyped nil so that callers' c == nil check works.
+	if c != nil {
+		t.Fatalf("expected nil for unconfigured ollama, got %v (%T)", c, c)
+	}
+
+	log := buf.String()
+	if !strings.Contains(log, "llm unconfigured") {
+		t.Errorf("expected 'llm unconfigured' warn in log, got: %s", log)
+	}
+	if !strings.Contains(log, "touchpoint=analysis") {
+		t.Errorf("expected touchpoint=analysis in log, got: %s", log)
+	}
+	if !strings.Contains(log, "team=t1") {
+		t.Errorf("expected team=t1 in log, got: %s", log)
 	}
 }

@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,7 +35,44 @@ type Config struct {
 	TrustXFF           bool   // TRUST_XFF=true — honor X-Forwarded-For for rate limiting (only set when behind a known reverse proxy)
 }
 
+// loadDotEnv reads KEY=VALUE lines from .env in the working directory and
+// sets each as an environment variable UNLESS it is already set — real
+// environment always wins over the file. Missing file is not an error.
+// Lines starting with # and blank lines are ignored; surrounding quotes on
+// values are stripped. This keeps local runs (go run, run.sh, MCP launchers)
+// configurable from one gitignored file without a dependency.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, value)
+		}
+	}
+}
+
 func Load() (Config, error) {
+	loadDotEnv(".env")
+
 	dim := 768
 	if v := os.Getenv("EMBEDDING_DIM"); v != "" {
 		parsed, err := strconv.Atoi(v)

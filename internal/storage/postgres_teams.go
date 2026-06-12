@@ -205,6 +205,10 @@ func (s *PostgresStore) SetTeamEnabled(ctx context.Context, id string, enabled b
 }
 
 func (s *PostgresStore) DeleteTeam(ctx context.Context, id string) error {
+	// Delete the team_settings row first (no FK, just cleanup).
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM team_settings WHERE team_id = $1", id); err != nil {
+		return fmt.Errorf("delete team_settings: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx, "DELETE FROM teams WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("delete team: %w", err)
@@ -214,6 +218,143 @@ func (s *PostgresStore) DeleteTeam(ctx context.Context, id string) error {
 		return fmt.Errorf("team %q: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// TeamDataCounts returns per-category record counts for the given team.
+func (s *PostgresStore) TeamDataCounts(ctx context.Context, id string) (TeamDataCounts, error) {
+	var c TeamDataCounts
+	queries := []struct {
+		dest *int
+		sql  string
+	}{
+		{&c.Users, "SELECT COUNT(*) FROM users WHERE team_id = $1"},
+		{&c.APIKeys, "SELECT COUNT(*) FROM api_keys WHERE team_id = $1"},
+		{&c.Entries, "SELECT COUNT(*) FROM entries WHERE team_id = $1"},
+		{&c.Clusters, "SELECT COUNT(*) FROM clusters WHERE team_id = $1"},
+		{&c.Agents, "SELECT COUNT(*) FROM agents WHERE team_id = $1"},
+		{&c.Rules, "SELECT COUNT(*) FROM rules WHERE team_id = $1"},
+	}
+	for _, q := range queries {
+		if err := s.db.QueryRowContext(ctx, q.sql, id).Scan(q.dest); err != nil {
+			return TeamDataCounts{}, fmt.Errorf("team data counts: %w", err)
+		}
+	}
+	return c, nil
+}
+
+// DeleteTeamMigrate transactionally migrates all data from team id to targetID,
+// handles agent domain conflicts, deletes source team_settings, and deletes the source team.
+func (s *PostgresStore) DeleteTeamMigrate(ctx context.Context, id, targetID string) (TeamMigrationSummary, error) {
+	if id == targetID {
+		return TeamMigrationSummary{}, fmt.Errorf("source and target team must be different")
+	}
+
+	// Validate target exists.
+	var exists int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM teams WHERE id = $1", targetID).Scan(&exists); err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("check target team: %w", err)
+	}
+	if exists == 0 {
+		return TeamMigrationSummary{}, fmt.Errorf("target team %q: %w", targetID, ErrBadTarget)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var sum TeamMigrationSummary
+
+	// Delete agent_versions for conflicting agents.
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM agent_versions WHERE agent_id IN (
+			SELECT a.id FROM agents a
+			WHERE a.team_id = $1
+			  AND EXISTS (
+			    SELECT 1 FROM agents b
+			    WHERE b.team_id = $2 AND b.domain = a.domain
+			  )
+		)
+	`, id, targetID)
+	if err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("delete conflicting agent_versions: %w", err)
+	}
+
+	// Delete conflicting agents from source, capture skipped count.
+	resSkip, err := tx.ExecContext(ctx, `
+		DELETE FROM agents
+		WHERE team_id = $1
+		  AND domain IN (
+		    SELECT domain FROM agents WHERE team_id = $2
+		  )
+	`, id, targetID)
+	if err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("delete conflicting agents: %w", err)
+	}
+	skipped, _ := resSkip.RowsAffected()
+	sum.AgentsSkipped = int(skipped)
+
+	// Move non-conflicting agents.
+	resAgents, err := tx.ExecContext(ctx,
+		"UPDATE agents SET team_id = $1 WHERE team_id = $2", targetID, id)
+	if err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("migrate agents: %w", err)
+	}
+	moved, _ := resAgents.RowsAffected()
+	sum.Agents = int(moved)
+
+	// Move agent_versions for remaining agents.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE agent_versions SET team_id = $1 WHERE team_id = $2", targetID, id); err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("migrate agent_versions: %w", err)
+	}
+
+	type tableUpdate struct {
+		dest *int
+		sql  string
+	}
+	updates := []tableUpdate{
+		{&sum.Users, "UPDATE users SET team_id = $1 WHERE team_id = $2"},
+		{&sum.APIKeys, "UPDATE api_keys SET team_id = $1 WHERE team_id = $2"},
+		{&sum.Entries, "UPDATE entries SET team_id = $1 WHERE team_id = $2"},
+		{&sum.Clusters, "UPDATE clusters SET team_id = $1 WHERE team_id = $2"},
+		{&sum.Rules, "UPDATE rules SET team_id = $1 WHERE team_id = $2"},
+		{nil, "UPDATE dataset_snapshots SET team_id = $1 WHERE team_id = $2"},
+		{nil, "UPDATE pipeline_runs SET team_id = $1 WHERE team_id = $2"},
+		{nil, "UPDATE feed_activity SET team_id = $1 WHERE team_id = $2"},
+		{nil, "UPDATE activity_log SET team_id = $1 WHERE team_id = $2"},
+	}
+	for _, u := range updates {
+		res, err := tx.ExecContext(ctx, u.sql, targetID, id)
+		if err != nil {
+			return TeamMigrationSummary{}, fmt.Errorf("migrate table: %w", err)
+		}
+		if u.dest != nil {
+			n, _ := res.RowsAffected()
+			*u.dest = int(n)
+		}
+	}
+
+	// Delete source team_settings.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM team_settings WHERE team_id = $1", id); err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("delete source team_settings: %w", err)
+	}
+
+	// Delete source team row.
+	res, err := tx.ExecContext(ctx, "DELETE FROM teams WHERE id = $1", id)
+	if err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("delete source team: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return TeamMigrationSummary{}, fmt.Errorf("team %q: %w", id, ErrNotFound)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return TeamMigrationSummary{}, fmt.Errorf("commit migration: %w", err)
+	}
+	return sum, nil
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────

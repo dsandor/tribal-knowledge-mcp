@@ -21,6 +21,9 @@ const (
 // ErrNotFound is returned when a requested entry does not exist.
 var ErrNotFound = errors.New("entry not found")
 
+// ErrBadTarget is returned by DeleteTeamMigrate when the target team does not exist.
+var ErrBadTarget = errors.New("target team not found")
+
 type KnowledgeEntry struct {
 	ID          string
 	Type        KnowledgeType

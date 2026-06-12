@@ -19,7 +19,7 @@ func RegisterPromptSuggest(s *server.MCPServer, store storage.Store, src *aiconf
 			mcplib.WithString("prompt", mcplib.Required(), mcplib.Description("Draft prompt to improve")),
 			mcplib.WithString("domain", mcplib.Description("Optional domain to focus suggestions")),
 		),
-		HandlePromptSuggest(store, src),
+		logTool("prompt_suggest", HandlePromptSuggest(store, src)),
 	)
 
 	s.AddPrompt(

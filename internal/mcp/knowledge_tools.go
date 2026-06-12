@@ -24,7 +24,7 @@ func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, src *ai
 			mcplib.WithString("domain", mcplib.Description("Optional domain filter")),
 			mcplib.WithNumber("top_k", mcplib.Description("Number of results (default 5, max 20)")),
 		),
-		HandleKnowledgeSearch(store, src),
+		logTool("knowledge_search", HandleKnowledgeSearch(store, src)),
 	)
 	s.AddTool(
 		mcplib.NewTool("knowledge_rate",
@@ -32,7 +32,7 @@ func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, src *ai
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Entry UUID")),
 			mcplib.WithNumber("rating", mcplib.Required(), mcplib.Description("1.0 to 5.0")),
 		),
-		HandleKnowledgeRate(store, bus),
+		logTool("knowledge_rate", HandleKnowledgeRate(store, bus)),
 	)
 }
 

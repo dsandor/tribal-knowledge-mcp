@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -395,5 +396,364 @@ func TestLogAndQueryActivity(t *testing.T) {
 	}
 	if len(entries) != 3 {
 		t.Errorf("want 3 entries, got %d", len(entries))
+	}
+}
+
+// ── Team deletion tests ───────────────────────────────────────────────────────
+
+// seedTeamData seeds one of each seeable category into the given team and
+// returns the agent ID (for later verification).
+func seedTeamData(t *testing.T, s *SQLiteStore, ctx context.Context, teamID string, domain string) (agentID string) {
+	t.Helper()
+
+	// 1. User (UpsertUser + AssignUserToTeam)
+	email := domain + "-user@test.example"
+	uid, err := s.UpsertUser(ctx, User{Email: email, Name: "Test", Role: "member"})
+	if err != nil {
+		t.Fatalf("UpsertUser: %v", err)
+	}
+	if err := s.AssignUserToTeam(ctx, uid, teamID, "member"); err != nil {
+		t.Fatalf("AssignUserToTeam: %v", err)
+	}
+
+	// 2. API key (CreateAPIKey)
+	if err := s.CreateAPIKey(ctx, APIKey{
+		ID:      domain + "-key",
+		TeamID:  teamID,
+		KeyType: APIKeyTypeTeam,
+		Name:    "ci",
+		KeyHash: domain + "-hash",
+		Role:    "member",
+	}); err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+
+	// 3. Entry (StoreEntry)
+	if _, err := s.StoreEntry(ctx, KnowledgeEntry{
+		Type:   "prompt",
+		Title:  domain + " entry",
+		TeamID: teamID,
+	}, nil); err != nil {
+		t.Fatalf("StoreEntry: %v", err)
+	}
+
+	// 4. Cluster (StoreCluster)
+	if _, err := s.StoreCluster(ctx, Cluster{
+		Domain: domain,
+		Title:  domain + " cluster",
+		TeamID: teamID,
+	}); err != nil {
+		t.Fatalf("StoreCluster: %v", err)
+	}
+
+	// 5. Agent (UpsertAgent) + AgentVersion (StoreAgentVersion)
+	agentID, err = s.UpsertAgent(ctx, Agent{
+		Domain:       domain,
+		TeamID:       teamID,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "sys-" + domain,
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if err := s.StoreAgentVersion(ctx, AgentVersion{
+		AgentID:      agentID,
+		Version:      1,
+		SystemPrompt: "v1",
+	}); err != nil {
+		t.Fatalf("StoreAgentVersion: %v", err)
+	}
+
+	// 6. Rule (StoreRule — inserts with team_id=''; we patch it via raw SQL since
+	//    StoreRule's INSERT doesn't accept a team_id parameter yet)
+	ruleID, err := s.StoreRule(ctx, Rule{
+		Title:   domain + " rule",
+		Content: "rule content",
+		Scope:   RuleScopeTeam,
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("StoreRule: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"UPDATE rules SET team_id = ? WHERE id = ?", teamID, ruleID,
+	); err != nil {
+		t.Fatalf("patch rule team_id: %v", err)
+	}
+
+	return agentID
+}
+
+func TestTeamDataCounts(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	t1, err := s.CreateTeam(ctx, Team{Name: "t1", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam t1: %v", err)
+	}
+	t2, err := s.CreateTeam(ctx, Team{Name: "t2", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam t2: %v", err)
+	}
+
+	// Seed t1 with one of each category.
+	_ = seedTeamData(t, s, ctx, t1, "dom1")
+
+	// t1 should have non-zero counts.
+	counts, err := s.TeamDataCounts(ctx, t1)
+	if err != nil {
+		t.Fatalf("TeamDataCounts t1: %v", err)
+	}
+	if counts.Users != 1 {
+		t.Errorf("Users = %d, want 1", counts.Users)
+	}
+	if counts.APIKeys != 1 {
+		t.Errorf("APIKeys = %d, want 1", counts.APIKeys)
+	}
+	if counts.Entries != 1 {
+		t.Errorf("Entries = %d, want 1", counts.Entries)
+	}
+	if counts.Clusters != 1 {
+		t.Errorf("Clusters = %d, want 1", counts.Clusters)
+	}
+	if counts.Agents != 1 {
+		t.Errorf("Agents = %d, want 1", counts.Agents)
+	}
+	if counts.Rules != 1 {
+		t.Errorf("Rules = %d, want 1", counts.Rules)
+	}
+
+	// t2 is empty — all zeros.
+	empty, err := s.TeamDataCounts(ctx, t2)
+	if err != nil {
+		t.Fatalf("TeamDataCounts t2: %v", err)
+	}
+	if empty != (TeamDataCounts{}) {
+		t.Errorf("empty team counts = %+v, want all zeros", empty)
+	}
+}
+
+func TestDeleteTeamMigrate(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	t1, err := s.CreateTeam(ctx, Team{Name: "source", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam source: %v", err)
+	}
+	t2, err := s.CreateTeam(ctx, Team{Name: "target", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam target: %v", err)
+	}
+
+	// Seed source with domain "d1".
+	sourceAgentID := seedTeamData(t, s, ctx, t1, "d1")
+
+	// Seed target with a conflicting agent of the SAME domain "d1".
+	targetAgentID, err := s.UpsertAgent(ctx, Agent{
+		Domain:       "d1",
+		TeamID:       t2,
+		Status:       AgentStatusDraft,
+		SystemPrompt: "target-sys-d1",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAgent target: %v", err)
+	}
+
+	// Also create a team_settings row for the source.
+	if err := s.PutTeamSettings(ctx, TeamSettings{
+		TeamID:             t1,
+		ClusterThreshold:   0.85,
+		PipelineMinEntries: 10,
+	}); err != nil {
+		t.Fatalf("PutTeamSettings: %v", err)
+	}
+
+	summary, err := s.DeleteTeamMigrate(ctx, t1, t2)
+	if err != nil {
+		t.Fatalf("DeleteTeamMigrate: %v", err)
+	}
+
+	// The source's conflicting agent was skipped (deleted, not moved).
+	if summary.AgentsSkipped != 1 {
+		t.Errorf("AgentsSkipped = %d, want 1", summary.AgentsSkipped)
+	}
+	// The source agent was not moved (it was deleted because of conflict).
+	if summary.Agents != 0 {
+		t.Errorf("Agents (moved) = %d, want 0", summary.Agents)
+	}
+	// Users, entries, clusters, rules each had 1 row.
+	if summary.Users != 1 {
+		t.Errorf("Users = %d, want 1", summary.Users)
+	}
+	if summary.Entries != 1 {
+		t.Errorf("Entries = %d, want 1", summary.Entries)
+	}
+	if summary.Clusters != 1 {
+		t.Errorf("Clusters = %d, want 1", summary.Clusters)
+	}
+	if summary.Rules != 1 {
+		t.Errorf("Rules = %d, want 1", summary.Rules)
+	}
+	// API key should be 1.
+	if summary.APIKeys != 1 {
+		t.Errorf("APIKeys = %d, want 1", summary.APIKeys)
+	}
+
+	// Source team is gone.
+	teams, err := s.ListTeams(ctx)
+	if err != nil {
+		t.Fatalf("ListTeams: %v", err)
+	}
+	for _, team := range teams {
+		if team.ID == t1 {
+			t.Errorf("source team still present after migration")
+		}
+	}
+
+	// Source team_settings row is gone.
+	row := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM team_settings WHERE team_id = ?", t1)
+	var cnt int
+	if err := row.Scan(&cnt); err != nil {
+		t.Fatalf("count team_settings: %v", err)
+	}
+	if cnt != 0 {
+		t.Errorf("source team_settings row still present after migration")
+	}
+
+	// The source's conflicting agent AND its versions are deleted.
+	a, err := s.GetAgent(ctx, sourceAgentID)
+	if err != nil {
+		t.Fatalf("GetAgent source: %v", err)
+	}
+	if a != nil {
+		t.Errorf("source conflicting agent should be deleted, still exists")
+	}
+	var verCnt int
+	vRow := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM agent_versions WHERE agent_id = ?", sourceAgentID)
+	if err := vRow.Scan(&verCnt); err != nil {
+		t.Fatalf("count agent_versions: %v", err)
+	}
+	if verCnt != 0 {
+		t.Errorf("source agent versions should be deleted, count=%d", verCnt)
+	}
+
+	// Target's own agent for "d1" is untouched.
+	ta, err := s.GetAgent(ctx, targetAgentID)
+	if err != nil {
+		t.Fatalf("GetAgent target: %v", err)
+	}
+	if ta == nil {
+		t.Fatalf("target's own agent for d1 should still exist")
+	}
+	if ta.SystemPrompt != "target-sys-d1" {
+		t.Errorf("target agent system_prompt = %q, want target-sys-d1", ta.SystemPrompt)
+	}
+
+	// Spot-check: entry now belongs to t2.
+	entries, err := s.ListEntries(ctx, ListFilter{TeamID: t2})
+	if err != nil {
+		t.Fatalf("ListEntries t2: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Errorf("expected migrated entry in t2")
+	}
+
+	// Spot-check: cluster now belongs to t2.
+	clusters, err := s.ListClusters(ctx, t2)
+	if err != nil {
+		t.Fatalf("ListClusters t2: %v", err)
+	}
+	if len(clusters) == 0 {
+		t.Errorf("expected migrated cluster in t2")
+	}
+
+	// Spot-check: user now belongs to t2.
+	users, err := s.ListUsers(ctx, t2)
+	if err != nil {
+		t.Fatalf("ListUsers t2: %v", err)
+	}
+	if len(users) == 0 {
+		t.Errorf("expected migrated user in t2")
+	}
+}
+
+func TestDeleteTeamMigrateValidation(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	t1, err := s.CreateTeam(ctx, Team{Name: "team1", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t2, err := s.CreateTeam(ctx, Team{Name: "team2", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	// Same source == target → error.
+	if _, err := s.DeleteTeamMigrate(ctx, t1, t1); err == nil {
+		t.Error("expected error when source == target")
+	}
+
+	// Unknown target → error (not ErrNotFound, just a validation error).
+	if _, err := s.DeleteTeamMigrate(ctx, t1, "nonexistent-team-id"); err == nil {
+		t.Error("expected error with unknown target")
+	}
+
+	// Unknown source → ErrNotFound.
+	_, err = s.DeleteTeamMigrate(ctx, "nonexistent-source-id", t2)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for unknown source, got %v", err)
+	}
+}
+
+func TestDeleteTeamCleansSettings(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	id, err := s.CreateTeam(ctx, Team{Name: "cleanup", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	// Create a settings row.
+	if err := s.PutTeamSettings(ctx, TeamSettings{
+		TeamID:             id,
+		ClusterThreshold:   0.9,
+		PipelineMinEntries: 5,
+	}); err != nil {
+		t.Fatalf("PutTeamSettings: %v", err)
+	}
+
+	// Verify settings row exists.
+	row := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM team_settings WHERE team_id = ?", id)
+	var cnt int
+	if err := row.Scan(&cnt); err != nil {
+		t.Fatalf("count settings before delete: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("expected 1 settings row before delete, got %d", cnt)
+	}
+
+	// Delete the team.
+	if err := s.DeleteTeam(ctx, id); err != nil {
+		t.Fatalf("DeleteTeam: %v", err)
+	}
+
+	// Team should be gone.
+	if _, err := s.GetTeam(ctx, id); err == nil {
+		t.Error("expected error after delete")
+	}
+
+	// Settings row should also be gone.
+	row2 := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM team_settings WHERE team_id = ?", id)
+	var cnt2 int
+	if err := row2.Scan(&cnt2); err != nil {
+		t.Fatalf("count settings after delete: %v", err)
+	}
+	if cnt2 != 0 {
+		t.Errorf("expected 0 settings rows after delete, got %d", cnt2)
 	}
 }

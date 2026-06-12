@@ -50,7 +50,9 @@ func clusterHash(entries []storage.KnowledgeEntry) string {
 // the cache write to the owning team.
 func (p *Pipeline) cachedScoreEntry(ctx context.Context, client llm.Client, entry storage.KnowledgeEntry, teamID string) (QualityScore, error) {
 	key := entryHash(entry)
-	if raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindScore, key); err == nil && ok {
+	raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindScore, key)
+	slog.Debug("analysis cache", "kind", cacheKindScore, "hit", ok && err == nil, "team", teamID)
+	if err == nil && ok {
 		var score QualityScore
 		if json.Unmarshal([]byte(raw), &score) == nil {
 			score.Total = score.Coherence + score.Specificity
@@ -86,7 +88,9 @@ func providerKey(fingerprint string) string {
 // teamID scopes the cache write to the owning team.
 func (p *Pipeline) cachedSummarizeCluster(ctx context.Context, client llm.Client, entries []storage.KnowledgeEntry, llmFingerprint string, teamID string) (SummarizeResult, error) {
 	key := providerKey(llmFingerprint) + "|" + clusterHash(entries)
-	if raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindSummary, key); err == nil && ok {
+	raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindSummary, key)
+	slog.Debug("analysis cache", "kind", cacheKindSummary, "hit", ok && err == nil, "team", teamID)
+	if err == nil && ok {
 		var result SummarizeResult
 		if json.Unmarshal([]byte(raw), &result) == nil {
 			return result, nil
@@ -121,7 +125,9 @@ type agentGenResult struct {
 // teamID scopes the cache write to the owning team.
 func (p *Pipeline) cachedAgentGen(ctx context.Context, client llm.Client, cluster storage.Cluster, clusterEntries []storage.KnowledgeEntry, llmFingerprint string, teamID string) (agentGenResult, error) {
 	key := providerKey(llmFingerprint) + "|" + clusterHash(clusterEntries)
-	if raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindAgent, key); err == nil && ok {
+	raw, ok, err := p.store.GetAnalysisCache(ctx, cacheKindAgent, key)
+	slog.Debug("analysis cache", "kind", cacheKindAgent, "hit", ok && err == nil, "team", teamID)
+	if err == nil && ok {
 		var result agentGenResult
 		if json.Unmarshal([]byte(raw), &result) == nil {
 			return result, nil

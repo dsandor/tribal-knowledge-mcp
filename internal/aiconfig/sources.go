@@ -45,15 +45,38 @@ const (
 
 const improvementHaikuModel = "claude-haiku-4-5-20251001"
 
-// clientFor returns the LLM client for cfg's effective provider. anthropicModel
-// is the model used when the provider is Anthropic (each resolver role pins its
-// own). Provider "ollama" uses the team's Ollama chat model; anything else
-// (including empty) means Anthropic for backward compatibility.
-func (s *Sources) clientFor(cfg *EffectiveConfig, anthropicModel string) llm.Client {
-	if cfg.LLMProvider.Effective == "ollama" {
-		return s.LLM.Ollama(cfg.OllamaURL.Effective, cfg.OllamaLLMModel.Effective)
+// resolveTouchpoint returns the provider and model for a touchpoint, applying
+// touchpoint-level overrides first, then falling back to the team-level defaults.
+// This logic is shared by LLMForTouchpoint and LLMFingerprint to avoid duplication.
+func resolveTouchpoint(cfg *EffectiveConfig, touchpoint string) (provider, model string) {
+	if tp, ok := cfg.AITouchpoints[touchpoint]; ok && tp.Provider != "" {
+		p := tp.Provider
+		m := tp.Model
+		if m == "" {
+			switch p {
+			case "ollama":
+				m = cfg.OllamaLLMModel.Effective
+			default:
+				m = anthropicFallbackModel(cfg, touchpoint)
+			}
+		}
+		return p, m
 	}
-	return s.LLM.Client(cfg.AnthropicAPIKey.Effective, anthropicModel)
+	// Team-level fallback.
+	if cfg.LLMProvider.Effective == "ollama" {
+		return "ollama", cfg.OllamaLLMModel.Effective
+	}
+	return "anthropic", anthropicFallbackModel(cfg, touchpoint)
+}
+
+// wrapLogged wraps a resolved client with logging context, preserving untyped
+// nil (a typed-nil inside the interface would defeat callers' nil checks).
+func wrapLogged(c llm.Client, provider, model, touchpoint, teamID string) llm.Client {
+	if c == nil {
+		slog.Warn("llm unconfigured", "touchpoint", touchpoint, "team", teamID, "provider", provider, "model", model)
+		return nil
+	}
+	return &llm.LoggingClient{Inner: c, Attrs: []any{"provider", provider, "model", model, "touchpoint", touchpoint, "team", teamID}}
 }
 
 // anthropicFallbackModel returns the Anthropic model used for a touchpoint when
@@ -81,23 +104,15 @@ func (s *Sources) LLMForTouchpoint(ctx context.Context, teamID, touchpoint strin
 		slog.Warn("aiconfig: resolve effective config", "touchpoint", touchpoint, "team", teamID, "err", err)
 		return nil
 	}
-	if tp, ok := cfg.AITouchpoints[touchpoint]; ok && tp.Provider != "" {
-		switch tp.Provider {
-		case "ollama":
-			model := tp.Model
-			if model == "" {
-				model = cfg.OllamaLLMModel.Effective
-			}
-			return s.LLM.Ollama(cfg.OllamaURL.Effective, model)
-		case "anthropic":
-			model := tp.Model
-			if model == "" {
-				model = anthropicFallbackModel(cfg, touchpoint)
-			}
-			return s.LLM.Client(cfg.AnthropicAPIKey.Effective, model)
-		}
+	provider, model := resolveTouchpoint(cfg, touchpoint)
+	var raw llm.Client
+	switch provider {
+	case "ollama":
+		raw = s.LLM.Ollama(cfg.OllamaURL.Effective, model)
+	default: // anthropic or empty → Anthropic for backward compat
+		raw = s.LLM.Client(cfg.AnthropicAPIKey.Effective, model)
 	}
-	return s.clientFor(cfg, anthropicFallbackModel(cfg, touchpoint))
+	return wrapLogged(raw, provider, model, touchpoint, teamID)
 }
 
 // AnalysisLLM returns a cached LLM client for the effective provider and model
@@ -158,26 +173,11 @@ func (s *Sources) LLMFingerprint(ctx context.Context, teamID, touchpoint string)
 		slog.Warn("aiconfig: resolve effective config for LLMFingerprint", "team", teamID, "err", err)
 		return ""
 	}
-	// Check explicit touchpoint override first.
-	if tp, ok := cfg.AITouchpoints[touchpoint]; ok && tp.Provider != "" {
-		switch tp.Provider {
-		case "ollama":
-			model := tp.Model
-			if model == "" {
-				model = cfg.OllamaLLMModel.Effective
-			}
-			return "ollama|" + cfg.OllamaURL.Effective + "|" + model
-		case "anthropic":
-			model := tp.Model
-			if model == "" {
-				model = anthropicFallbackModel(cfg, touchpoint)
-			}
-			return "anthropic|" + model
-		}
+	provider, model := resolveTouchpoint(cfg, touchpoint)
+	switch provider {
+	case "ollama":
+		return "ollama|" + cfg.OllamaURL.Effective + "|" + model
+	default:
+		return "anthropic|" + model
 	}
-	// Fall back to team-level provider.
-	if cfg.LLMProvider.Effective == "ollama" {
-		return "ollama|" + cfg.OllamaURL.Effective + "|" + cfg.OllamaLLMModel.Effective
-	}
-	return "anthropic|" + anthropicFallbackModel(cfg, touchpoint)
 }

@@ -96,6 +96,28 @@ type ActivityEntry struct {
 	CreatedAt  time.Time
 }
 
+// TeamDataCounts reports how many team-owned records exist for a given team ID.
+// Used by the handler to guard against deleting a non-empty team.
+type TeamDataCounts struct {
+	Users    int `json:"users"`
+	APIKeys  int `json:"api_keys"`
+	Entries  int `json:"entries"`
+	Clusters int `json:"clusters"`
+	Agents   int `json:"agents"`
+	Rules    int `json:"rules"`
+}
+
+// TeamMigrationSummary reports what DeleteTeamMigrate moved or skipped.
+type TeamMigrationSummary struct {
+	Users         int `json:"users"`
+	APIKeys       int `json:"api_keys"`
+	Entries       int `json:"entries"`
+	Clusters      int `json:"clusters"`
+	Agents        int `json:"agents"`
+	AgentsSkipped int `json:"agents_skipped"`
+	Rules         int `json:"rules"`
+}
+
 // TeamStore handles teams, users, sessions, API keys, settings, auth config, and activity log.
 // *SQLiteStore implements this interface.
 type TeamStore interface {
@@ -106,6 +128,11 @@ type TeamStore interface {
 	UpdateTeam(ctx context.Context, id, name string, domainPatterns []string) error
 	SetTeamEnabled(ctx context.Context, id string, enabled bool) error
 	DeleteTeam(ctx context.Context, id string) error
+	// TeamDataCounts returns counts of team-owned records for the given team ID.
+	TeamDataCounts(ctx context.Context, id string) (TeamDataCounts, error)
+	// DeleteTeamMigrate transactionally migrates all data from team id to targetID,
+	// then deletes the source team. Returns a summary of what was moved/skipped.
+	DeleteTeamMigrate(ctx context.Context, id, targetID string) (TeamMigrationSummary, error)
 
 	// Users
 	UpsertUser(ctx context.Context, u User) (string, error)

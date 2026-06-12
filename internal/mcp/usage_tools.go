@@ -25,7 +25,7 @@ func RegisterUsageTools(s *server.MCPServer, store storage.Store, bus live.Event
 			mcplib.WithNumber("selected_index", mcplib.Description("Which result index was selected (default 0)")),
 			mcplib.WithString("user_id", mcplib.Description("Identifier for the user accepting the suggestion")),
 		),
-		HandleKnowledgeUse(store, bus),
+		logTool("knowledge_use", HandleKnowledgeUse(store, bus)),
 	)
 }
 

@@ -48,7 +48,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithArray("tags", mcplib.Description("Additional tags (inline #hashtags in content are also extracted automatically)")),
 			mcplib.WithBoolean("dry_run", mcplib.Description("If true, validate and preview the entry without storing it. Returns the entry that would be stored including its content_hash.")),
 		),
-		HandleKnowledgeStore(store, src, eventBus),
+		logTool("knowledge_store", HandleKnowledgeStore(store, src, eventBus)),
 	)
 
 	s.AddTool(
@@ -56,7 +56,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithDescription("Retrieve a knowledge entry by UUID — use when you need the full content of an entry returned by knowledge_search or enrich_context."),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Entry UUID returned by knowledge_store or knowledge_list")),
 		),
-		HandleKnowledgeGet(store),
+		logTool("knowledge_get", HandleKnowledgeGet(store)),
 	)
 
 	s.AddTool(
@@ -66,7 +66,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithString("type", mcplib.Description("Filter by type: prompt, pattern, workflow, domain_fact, anti_pattern")),
 			mcplib.WithNumber("limit", mcplib.Description("Max entries to return (default 20, max 100)")),
 		),
-		HandleKnowledgeList(store),
+		logTool("knowledge_list", HandleKnowledgeList(store)),
 	)
 
 	s.AddTool(
@@ -74,7 +74,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithDescription("Permanently delete a knowledge entry — call only after confirming with the user that an entry is outdated or incorrect."),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Entry UUID to delete")),
 		),
-		HandleKnowledgeDelete(store),
+		logTool("knowledge_delete", HandleKnowledgeDelete(store)),
 	)
 
 	return s
@@ -86,13 +86,13 @@ func RegisterAnalysisTools(s *server.MCPServer, store storage.AnalysisStore) {
 		mcplib.NewTool("cluster_list",
 			mcplib.WithDescription("List knowledge clusters produced by the analysis pipeline, with LLM-generated summaries"),
 		),
-		HandleClusterList(store),
+		logTool("cluster_list", HandleClusterList(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("analysis_status",
 			mcplib.WithDescription("Show the latest analysis pipeline run status and dataset snapshot info"),
 		),
-		HandleAnalysisStatus(store),
+		logTool("analysis_status", HandleAnalysisStatus(store)),
 	)
 }
 
@@ -102,7 +102,7 @@ func RegisterAgentTools(s *server.MCPServer, store storage.AgentStore) {
 		mcplib.NewTool("agent_list",
 			mcplib.WithDescription("List all AI agents generated from knowledge clusters, with their domain, version, and status"),
 		),
-		HandleAgentList(store),
+		logTool("agent_list", HandleAgentList(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("agent_get",
@@ -110,14 +110,14 @@ func RegisterAgentTools(s *server.MCPServer, store storage.AgentStore) {
 			mcplib.WithString("id", mcplib.Description("Agent UUID (optional if domain provided)")),
 			mcplib.WithString("domain", mcplib.Description("Domain name, e.g. finance (optional if id provided)")),
 		),
-		HandleAgentGet(store),
+		logTool("agent_get", HandleAgentGet(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("agent_publish",
 			mcplib.WithDescription("Approve a draft agent — sets its status to published so it can be served to clients"),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Agent UUID to publish")),
 		),
-		HandleAgentPublish(store),
+		logTool("agent_publish", HandleAgentPublish(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("agent_export",
@@ -126,7 +126,7 @@ func RegisterAgentTools(s *server.MCPServer, store storage.AgentStore) {
 			mcplib.WithString("domain", mcplib.Description("Domain name (optional if id provided)")),
 			mcplib.WithString("format", mcplib.Description("Export format: md, txt, or json (default: md)")),
 		),
-		HandleAgentExport(store),
+		logTool("agent_export", HandleAgentExport(store)),
 	)
 
 	s.AddPrompt(
@@ -182,14 +182,14 @@ func RegisterRuleTools(s *server.MCPServer, store storage.RuleStore) {
 			mcplib.WithNumber("priority", mcplib.Description("Rule priority — higher = applied first within scope (default 0)")),
 			mcplib.WithString("author", mcplib.Description("Author identifier")),
 		),
-		HandleRuleStore(store),
+		logTool("rule_store", HandleRuleStore(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("rule_get",
 			mcplib.WithDescription("Retrieve a rule by its UUID"),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Rule UUID")),
 		),
-		HandleRuleGet(store),
+		logTool("rule_get", HandleRuleGet(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("rule_list",
@@ -198,7 +198,7 @@ func RegisterRuleTools(s *server.MCPServer, store storage.RuleStore) {
 			mcplib.WithString("scope_value", mcplib.Description("Filter by scope value (team ID, category, or user)")),
 			mcplib.WithNumber("limit", mcplib.Description("Max rules to return (default 20)")),
 		),
-		HandleRuleList(store),
+		logTool("rule_list", HandleRuleList(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("rule_update",
@@ -212,14 +212,14 @@ func RegisterRuleTools(s *server.MCPServer, store storage.RuleStore) {
 			mcplib.WithString("enabled", mcplib.Description("'true' or 'false' (default 'true')")),
 			mcplib.WithString("author", mcplib.Description("Updated author")),
 		),
-		HandleRuleUpdate(store),
+		logTool("rule_update", HandleRuleUpdate(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("rule_delete",
 			mcplib.WithDescription("Permanently delete a rule by its UUID"),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Rule UUID to delete")),
 		),
-		HandleRuleDelete(store),
+		logTool("rule_delete", HandleRuleDelete(store)),
 	)
 	s.AddTool(
 		mcplib.NewTool("prompt_enhance",
@@ -229,6 +229,6 @@ func RegisterRuleTools(s *server.MCPServer, store storage.RuleStore) {
 			mcplib.WithString("category", mcplib.Description("Category/domain — fetches category-scoped rules")),
 			mcplib.WithString("user", mcplib.Description("User identifier — fetches user-scoped rules")),
 		),
-		HandlePromptEnhance(store),
+		logTool("prompt_enhance", HandlePromptEnhance(store)),
 	)
 }
