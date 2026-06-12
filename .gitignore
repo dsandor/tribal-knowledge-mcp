@@ -34,3 +34,5 @@ web/dist/
 # Test artifacts
 *.test
 coverage.out
+
+tribal-knowledge
