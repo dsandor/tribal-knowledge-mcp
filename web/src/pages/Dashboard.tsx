@@ -73,16 +73,32 @@ function LiveDot() {
 // ─── Stat card with animated counter ─────────────────────────────────────────
 
 function StatCard({
-  title, value, icon: Icon, color, subtitle,
+  title, value, icon: Icon, color, subtitle, to,
 }: {
   title: string
   value: number
   icon: React.ElementType
   color: string
   subtitle?: string
+  to?: string
 }) {
   return (
-    <Card sx={{ height: '100%' }}>
+    <Card
+      {...(to ? { component: Link, to } : {})}
+      sx={{
+        height: '100%',
+        display: 'block',
+        textDecoration: 'none',
+        ...(to && {
+          cursor: 'pointer',
+          transition: 'transform 0.15s ease, border-color 0.15s ease',
+          '&:hover': {
+            transform: 'translateY(-2px)',
+            borderColor: color,
+          },
+        }),
+      }}
+    >
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 1 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase', fontSize: 10 }}>
@@ -415,17 +431,18 @@ export default function Dashboard() {
         {/* ── Hero stats row ── */}
         <Grid container spacing={2}>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
-            <StatCard title="Entries" value={stats?.knowledge_count ?? 0} icon={BookOpen} color="#60a5fa" />
+            <StatCard title="Entries" value={stats?.knowledge_count ?? 0} icon={BookOpen} color="#60a5fa" to="/knowledge" />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
-            <StatCard title="Clusters" value={stats?.cluster_count ?? 0} icon={Network} color="#a78bfa" />
+            <StatCard title="Clusters" value={stats?.cluster_count ?? 0} icon={Network} color="#a78bfa" to="/clusters" />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
-            <StatCard title="Agents" value={stats?.agent_count ?? 0} icon={Bot} color="#34d399" />
+            <StatCard title="Agents" value={stats?.agent_count ?? 0} icon={Bot} color="#34d399" to="/agents" />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
             <StatCard title="Total Uses" value={totalUsage} icon={Zap} color="#fbbf24"
               subtitle={stats?.pipeline_status ? `Pipeline: ${stats.pipeline_status}` : undefined}
+              to="/analytics"
             />
           </Grid>
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
@@ -439,6 +456,7 @@ export default function Dashboard() {
           <Grid size={{ xs: 6, sm: 4, lg: 2 }}>
             <StatCard title="Trending" value={trending?.length ?? 0} icon={TrendingUp} color="#fb923c"
               subtitle={trending && trending.length > 0 ? `Top: ${trending[0].signal_score.toFixed(1)} signal` : undefined}
+              to="/analytics"
             />
           </Grid>
         </Grid>

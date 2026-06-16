@@ -342,3 +342,71 @@ func TestGetAgentByDomain_LegacyFallback(t *testing.T) {
 		t.Errorf("after team-specific upsert: want id %q, got %v", id2, a2)
 	}
 }
+
+func TestRenameDomain_Cascades(t *testing.T) {
+	s := newTestAgentStore(t)
+	ctx := context.Background()
+
+	// Target domain "engineering" on team t1: one entry, one cluster, one agent.
+	if _, err := s.StoreEntry(ctx, KnowledgeEntry{
+		Type: KTPattern, Title: "Eng entry", Content: "c", Domain: "engineering",
+		Author: "a", Team: "t1", TeamID: "t1",
+	}, []float32{0.1, 0.2, 0.3, 0.4}); err != nil {
+		t.Fatalf("StoreEntry: %v", err)
+	}
+	if _, err := s.StoreCluster(ctx, Cluster{Domain: "engineering", Title: "Eng cluster", TeamID: "t1"}); err != nil {
+		t.Fatalf("StoreCluster: %v", err)
+	}
+	if _, err := s.UpsertAgent(ctx, Agent{Domain: "engineering", Version: 1, Status: AgentStatusDraft, TeamID: "t1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	// Control rows that must NOT change: same domain different team, and different domain same team.
+	if _, err := s.UpsertAgent(ctx, Agent{Domain: "engineering", Version: 1, Status: AgentStatusDraft, TeamID: "t2"}); err != nil {
+		t.Fatalf("UpsertAgent control team: %v", err)
+	}
+	if _, err := s.UpsertAgent(ctx, Agent{Domain: "legal", Version: 1, Status: AgentStatusDraft, TeamID: "t1"}); err != nil {
+		t.Fatalf("UpsertAgent control domain: %v", err)
+	}
+
+	res, err := s.RenameDomain(ctx, "t1", "engineering", "Backend API Design")
+	if err != nil {
+		t.Fatalf("RenameDomain: %v", err)
+	}
+	if res.Entries != 1 || res.Clusters != 1 || res.Agents != 1 {
+		t.Errorf("counts = %+v, want entries=1 clusters=1 agents=1", res)
+	}
+
+	// t1 agent now under the new domain.
+	got, _ := s.GetAgentByDomain(ctx, "Backend API Design", "t1")
+	if got == nil {
+		t.Fatal("agent not found under new domain for t1")
+	}
+	// Control team t2 still under old domain.
+	t2, _ := s.GetAgentByDomain(ctx, "engineering", "t2")
+	if t2 == nil {
+		t.Error("t2 agent should remain under old domain")
+	}
+}
+
+func TestRenameDomain_ConflictRejected(t *testing.T) {
+	s := newTestAgentStore(t)
+	ctx := context.Background()
+
+	if _, err := s.UpsertAgent(ctx, Agent{Domain: "engineering", Version: 1, Status: AgentStatusDraft, TeamID: "t1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if _, err := s.UpsertAgent(ctx, Agent{Domain: "platform", Version: 1, Status: AgentStatusDraft, TeamID: "t1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	_, err := s.RenameDomain(ctx, "t1", "engineering", "platform")
+	if err != ErrDomainExists {
+		t.Fatalf("want ErrDomainExists, got %v", err)
+	}
+	// Original agent untouched.
+	got, _ := s.GetAgentByDomain(ctx, "engineering", "t1")
+	if got == nil {
+		t.Error("engineering agent should be unchanged after rejected rename")
+	}
+}

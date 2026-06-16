@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -55,4 +56,21 @@ type AgentStore interface {
 	PublishAgent(ctx context.Context, id string) error
 	StoreAgentVersion(ctx context.Context, version AgentVersion) error
 	ListAgentVersions(ctx context.Context, agentID string) ([]AgentVersion, error)
+	// RenameDomain renames a domain across all of a team's entries, clusters,
+	// and agents in a single transaction, returning per-table update counts.
+	// Returns ErrDomainExists if the team already has an agent under newDomain
+	// (the agents.domain UNIQUE(domain, team_id) constraint would otherwise be
+	// violated). Callers must ensure oldDomain and newDomain differ.
+	RenameDomain(ctx context.Context, teamID, oldDomain, newDomain string) (RenameDomainResult, error)
+}
+
+// ErrDomainExists is returned by RenameDomain when the target domain is already
+// in use by another agent in the same team.
+var ErrDomainExists = errors.New("an agent already uses the target domain")
+
+// RenameDomainResult reports how many rows each table had updated by a domain rename.
+type RenameDomainResult struct {
+	Entries  int `json:"entries"`
+	Clusters int `json:"clusters"`
+	Agents   int `json:"agents"`
 }

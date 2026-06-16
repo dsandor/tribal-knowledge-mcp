@@ -215,6 +215,23 @@ export const api = {
       }
       return r.json()
     },
+    rename: async (id: string, newDomain: string): Promise<{
+      ok: boolean
+      old_domain: string
+      new_domain: string
+      updated: { entries: number; clusters: number; agents: number }
+    }> => {
+      const r = await apiFetch(`${BASE}/agents/${id}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_domain: newDomain }),
+      })
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: 'rename failed' }))
+        throw new Error(err.message || err.error || 'rename failed')
+      }
+      return r.json()
+    },
   },
 
   pipeline: {
@@ -223,6 +240,27 @@ export const api = {
 }
 
 // --- Auth ---
+export interface AuthInfo {
+  provider: string;       // "local" | "oidc"
+  oidc_enabled: boolean;
+}
+
+// Public: which auth provider the server is configured for. No auth required.
+export async function fetchAuthInfo(): Promise<AuthInfo> {
+  const r = await fetch('/auth/info');
+  if (!r.ok) throw new Error('fetch auth info failed');
+  return r.json();
+}
+
+// Verify the current session cookie or Bearer key. Resolves true when authed.
+export async function checkAuth(): Promise<boolean> {
+  const key = localStorage.getItem('tkm_api_key');
+  const r = await fetch('/api/me', {
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+  });
+  return r.ok;
+}
+
 export async function login(email: string, password: string) {
   const r = await fetch('/auth/login', {
     method: 'POST',

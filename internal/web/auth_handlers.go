@@ -71,6 +71,32 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"ok": "true", "email": info.Email})
 }
 
+// handleAuthInfo is a public endpoint that tells the login page which auth
+// provider is configured, so it can present the right sign-in option. It never
+// exposes secrets.
+func (s *Server) handleAuthInfo(w http.ResponseWriter, r *http.Request) {
+	provider := "local"
+	if cfg, err := s.store.GetAuthConfig(r.Context()); err == nil && cfg != nil && cfg.Provider != "" {
+		provider = cfg.Provider
+	}
+	writeJSON(w, map[string]any{
+		"provider":     provider,
+		"oidc_enabled": provider == "oidc",
+	})
+}
+
+// handleMe returns the authenticated caller's identity. Used by the SPA to
+// verify a session cookie or Bearer key and gate protected routes.
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	tc := auth.GetTeamContext(r.Context())
+	writeJSON(w, map[string]any{
+		"user_id": tc.UserID,
+		"team_id": tc.TeamID,
+		"role":    tc.Role,
+		"display": tc.Display,
+	})
+}
+
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.store.GetAuthConfig(r.Context())
 	if err != nil || cfg.Provider != "oidc" {
@@ -137,10 +163,16 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "upsert user failed")
 		return
 	}
-	if user == nil || user.TeamID == "" {
+	// Group the user into a team by the team whitelist (domain_patterns). New
+	// users, and users still parked in the unassigned team, are (re-)resolved so
+	// that adding a whitelist pattern later moves them on their next login. Users
+	// an admin manually assigned are left untouched (AutoAssignUserToTeam no-ops).
+	if user == nil || user.TeamID == "" || user.TeamID == storage.UnassignedTeamID {
+		teamID := storage.UnassignedTeamID
 		if team, _ := s.store.ResolveTeamByEmail(r.Context(), info.Email); team != nil {
-			_ = s.store.AssignUserToTeam(r.Context(), uid, team.ID, role)
+			teamID = team.ID
 		}
+		_ = s.store.AutoAssignUserToTeam(r.Context(), uid, teamID, role)
 	}
 	sessionToken, tokenHash := generateToken()
 	_ = s.store.CreateSession(r.Context(), storage.Session{

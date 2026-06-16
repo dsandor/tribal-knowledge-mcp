@@ -38,6 +38,10 @@ const (
 	APIKeyTypeUser = "user"
 )
 
+// UnassignedTeamID is the reserved team that users land in when no team's
+// whitelist (domain_patterns) matches their email. Seeded at startup.
+const UnassignedTeamID = "unassigned"
+
 type APIKey struct {
 	ID         string
 	TeamID     string // empty for superadmin keys
@@ -141,6 +145,11 @@ type TeamStore interface {
 	GetUserByExternalID(ctx context.Context, externalID string) (*User, error)
 	ListUsers(ctx context.Context, teamID string) ([]User, error)
 	AssignUserToTeam(ctx context.Context, userID, teamID, role string) error
+	// AutoAssignUserToTeam assigns a user to a team without marking the
+	// assignment as manual, and only if the user has not been manually
+	// assigned by an admin. Used by the OIDC login flow for whitelist-based
+	// grouping. A no-op (no error) when the user is manually assigned.
+	AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error
 	// ResolveTeamByEmail returns the first enabled team whose domain_patterns
 	// contains a regex matching email; returns nil (no error) if none match.
 	ResolveTeamByEmail(ctx context.Context, email string) (*Team, error)

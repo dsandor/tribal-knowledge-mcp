@@ -102,15 +102,27 @@ func main() {
 		bootstrapSuperadmin(store, cfg.SuperadminKey)
 	}
 
+	ensureUnassignedTeam(store)
+
 	// Single-team deployments converge legacy team-less rows onto the one
 	// real team. Multi-team installs are left untouched (ownership unknown).
 	{
 		bfCtx := context.Background()
-		if teams, err := store.ListTeams(bfCtx); err == nil && len(teams) == 1 {
-			if err := store.BackfillTeamID(bfCtx, teams[0].ID); err != nil {
-				slog.Error("team backfill failed", "err", err)
-			} else {
-				slog.Info("team backfill applied", "team", teams[0].ID)
+		if teams, err := store.ListTeams(bfCtx); err == nil {
+			// Ignore the reserved unassigned team when deciding whether this is
+			// a single-team deployment.
+			var real []storage.Team
+			for _, t := range teams {
+				if t.ID != storage.UnassignedTeamID {
+					real = append(real, t)
+				}
+			}
+			if len(real) == 1 {
+				if err := store.BackfillTeamID(bfCtx, real[0].ID); err != nil {
+					slog.Error("team backfill failed", "err", err)
+				} else {
+					slog.Info("team backfill applied", "team", real[0].ID)
+				}
 			}
 		}
 
@@ -297,4 +309,23 @@ func bootstrapSuperadmin(store storage.TeamStore, rawKey string) {
 		return
 	}
 	slog.Info("superadmin API key bootstrapped")
+}
+
+// ensureUnassignedTeam seeds the reserved "unassigned" team that users fall
+// into when no team's whitelist matches their email at OIDC login time.
+func ensureUnassignedTeam(store storage.TeamStore) {
+	ctx := context.Background()
+	if t, _ := store.GetTeam(ctx, storage.UnassignedTeamID); t != nil {
+		return
+	}
+	_, err := store.CreateTeam(ctx, storage.Team{
+		ID:      storage.UnassignedTeamID,
+		Name:    "Unassigned",
+		Enabled: true,
+	})
+	if err != nil {
+		slog.Warn("failed to seed unassigned team", "err", err)
+		return
+	}
+	slog.Info("unassigned team seeded")
 }

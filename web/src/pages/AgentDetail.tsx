@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api, type Agent, type AgentVersion } from '@/lib/api'
-import { ArrowLeft, Download, CheckCircle, Wand2 } from 'lucide-react'
+import { ArrowLeft, Download, CheckCircle, Wand2, Pencil, Check, X } from 'lucide-react'
 import type { ChipProps } from '@mui/material/Chip'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -17,6 +17,7 @@ import List from '@mui/material/List'
 import ListItem from '@mui/material/ListItem'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 
 function typeColor(type: string): ChipProps['color'] {
@@ -45,6 +46,11 @@ export default function AgentDetail() {
   const [feedback, setFeedback] = useState('')
   const [refactoring, setRefactoring] = useState(false)
   const [refactorError, setRefactorError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [newDomain, setNewDomain] = useState('')
+  const [renameSubmitting, setRenameSubmitting] = useState(false)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renameMsg, setRenameMsg] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -79,6 +85,34 @@ export default function AgentDetail() {
     }
   }
 
+  const startRename = () => {
+    if (!agent) return
+    setNewDomain(agent.Domain)
+    setRenameError(null)
+    setRenameMsg(null)
+    setRenaming(true)
+  }
+
+  const submitRename = async () => {
+    if (!id || !agent) return
+    const next = newDomain.trim()
+    if (!next || next === agent.Domain) { setRenaming(false); return }
+    setRenameSubmitting(true)
+    setRenameError(null)
+    try {
+      const res = await api.agents.rename(id, next)
+      setRenaming(false)
+      setRenameMsg(
+        `Renamed to "${res.new_domain}" — updated ${res.updated.entries} entries, ${res.updated.clusters} clusters, ${res.updated.agents} agents.`,
+      )
+      await reload(id)
+    } catch (e) {
+      setRenameError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRenameSubmitting(false)
+    }
+  }
+
   const publish = async () => {
     if (!id) return
     setPublishing(true)
@@ -106,12 +140,48 @@ export default function AgentDetail() {
         <IconButton size="small" onClick={() => navigate(-1)}>
           <ArrowLeft style={{ width: 16, height: 16 }} />
         </IconButton>
-        <Typography variant="h6" sx={{ flex: 1, textTransform: 'capitalize', fontWeight: 600 }}>
-          {agent.Domain} Agent
-        </Typography>
+        {renaming ? (
+          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1, minWidth: 240 }}>
+            <TextField
+              size="small"
+              autoFocus
+              fullWidth
+              label="Domain name"
+              value={newDomain}
+              onChange={e => setNewDomain(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') submitRename()
+                if (e.key === 'Escape') setRenaming(false)
+              }}
+              disabled={renameSubmitting}
+              helperText="Renames this domain across all associated entries, clusters, and agents."
+            />
+            <IconButton size="small" color="success" onClick={submitRename} disabled={renameSubmitting}>
+              {renameSubmitting ? <CircularProgress size={16} color="inherit" /> : <Check style={{ width: 16, height: 16 }} />}
+            </IconButton>
+            <IconButton size="small" onClick={() => setRenaming(false)} disabled={renameSubmitting}>
+              <X style={{ width: 16, height: 16 }} />
+            </IconButton>
+          </Box>
+        ) : (
+          <>
+            <Typography variant="h6" sx={{ textTransform: 'capitalize', fontWeight: 600 }}>
+              {agent.Domain} Agent
+            </Typography>
+            <Tooltip title="Rename domain">
+              <IconButton size="small" onClick={startRename}>
+                <Pencil style={{ width: 14, height: 14 }} />
+              </IconButton>
+            </Tooltip>
+            <Box sx={{ flex: 1 }} />
+          </>
+        )}
         <Chip label={agent.Status} size="small" color={typeColor(agent.Status)} />
         <Typography variant="caption" color="text.secondary">v{agent.Version}</Typography>
       </Box>
+
+      {renameError && <Alert severity="error" onClose={() => setRenameError(null)}>{renameError}</Alert>}
+      {renameMsg && <Alert severity="success" onClose={() => setRenameMsg(null)}>{renameMsg}</Alert>}
 
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         {agent.Status === 'draft' && (

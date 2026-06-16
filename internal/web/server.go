@@ -170,6 +170,7 @@ func (s *Server) routes() {
 	r.Get("/health", s.handleHealth)
 
 	// Auth — public
+	r.Get("/auth/info", s.handleAuthInfo)
 	r.Post("/auth/login", s.handleLogin)
 	r.Get("/auth/oidc/login", s.handleOIDCLogin)
 	r.Get("/auth/oidc/callback", s.handleOIDCCallback)
@@ -180,6 +181,7 @@ func (s *Server) routes() {
 	// Member routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Get("/api/me", s.handleMe)
 		r.Get("/api/stats", s.handleStats)
 		r.Get("/api/knowledge", s.handleKnowledgeList)
 		r.Get("/api/knowledge/export", s.handleKnowledgeExport)
@@ -217,6 +219,7 @@ func (s *Server) routes() {
 		r.Post("/api/knowledge/batch-approve", s.handleBatchApprove)
 		r.Post("/api/knowledge/batch-reject", s.handleBatchReject)
 		r.Put("/api/agents/{id}/publish", s.handleAgentPublish)
+		r.Post("/api/agents/{id}/rename", s.handleAgentRename)
 		r.Post("/api/knowledge/import", s.handleKnowledgeImport)
 	})
 

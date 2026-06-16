@@ -18,7 +18,10 @@ var _ TeamStore = (*SQLiteStore)(nil)
 // ── Teams ────────────────────────────────────────────────────────────────────
 
 func (s *SQLiteStore) CreateTeam(ctx context.Context, t Team) (string, error) {
-	id := uuid.NewString()
+	id := t.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	patternsJSON, err := json.Marshal(t.DomainPatterns)
 	if err != nil {
 		return "", fmt.Errorf("marshal domain_patterns: %w", err)
@@ -377,6 +380,18 @@ func (s *SQLiteStore) AssignUserToTeam(ctx context.Context, userID, teamID, role
 	if n == 0 {
 		return fmt.Errorf("user %q: %w", userID, ErrNotFound)
 	}
+	return nil
+}
+
+func (s *SQLiteStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE users SET team_id = ?, role = ? WHERE id = ? AND manually_assigned = 0",
+		teamID, role, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("auto-assign user to team: %w", err)
+	}
+	// Zero rows affected means the user was manually assigned; leave them be.
 	return nil
 }
 

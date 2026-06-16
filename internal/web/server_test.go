@@ -141,6 +141,9 @@ func (m *mockStore) Close() error                                               
 func (m *mockStore) UpsertAgent(_ context.Context, _ storage.Agent) (string, error) {
 	return "x", nil
 }
+func (m *mockStore) RenameDomain(_ context.Context, _, _, _ string) (storage.RenameDomainResult, error) {
+	return storage.RenameDomainResult{}, nil
+}
 func (m *mockStore) GetAgent(_ context.Context, id string) (*storage.Agent, error) {
 	for i := range m.agents {
 		if m.agents[i].ID == id {
@@ -212,6 +215,9 @@ func (m *mockStore) ListUsers(_ context.Context, teamID string) ([]storage.User,
 	return nil, nil
 }
 func (m *mockStore) AssignUserToTeam(_ context.Context, userID, teamID, role string) error {
+	return nil
+}
+func (m *mockStore) AutoAssignUserToTeam(_ context.Context, userID, teamID, role string) error {
 	return nil
 }
 func (m *mockStore) ResolveTeamByEmail(_ context.Context, email string) (*storage.Team, error) {

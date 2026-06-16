@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -434,6 +435,72 @@ func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"agent": result})
+}
+
+// handleAgentRename renames an agent's domain, cascading the new domain across
+// the team's entries, clusters, and agents in a single transaction.
+func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	var body struct {
+		NewDomain string `json:"new_domain"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+	newDomain := strings.TrimSpace(body.NewDomain)
+	if newDomain == "" {
+		writeError(w, 400, "bad_request", "new_domain is required")
+		return
+	}
+	if len([]rune(newDomain)) > 100 {
+		writeError(w, 400, "bad_request", "new_domain must be 100 characters or fewer")
+		return
+	}
+
+	a, err := s.store.GetAgent(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, 404, "not_found", "agent not found")
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("get agent: %v", err))
+		return
+	}
+	if a == nil {
+		writeError(w, 404, "not_found", "agent not found")
+		return
+	}
+
+	tc := auth.GetTeamContext(ctx)
+	if !auth.CanAccess(tc, a.TeamID) {
+		writeError(w, 403, "forbidden", "agent belongs to another team")
+		return
+	}
+
+	if newDomain == a.Domain {
+		writeError(w, 400, "bad_request", "new_domain must differ from the current domain")
+		return
+	}
+
+	res, err := s.store.RenameDomain(ctx, a.TeamID, a.Domain, newDomain)
+	if err != nil {
+		if errors.Is(err, storage.ErrDomainExists) {
+			writeError(w, 409, "domain_exists", fmt.Sprintf("an agent already uses the domain %q", newDomain))
+			return
+		}
+		writeError(w, 500, "internal_error", fmt.Sprintf("rename domain: %v", err))
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"ok":         true,
+		"old_domain": a.Domain,
+		"new_domain": newDomain,
+		"updated":    res,
+	})
 }
 
 func (s *Server) handleAgentBulkExport(w http.ResponseWriter, r *http.Request) {

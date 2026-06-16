@@ -1,4 +1,8 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import Box from '@mui/material/Box'
+import CircularProgress from '@mui/material/CircularProgress'
+import { checkAuth } from '@/lib/api'
 import Layout from '@/components/Layout'
 import Dashboard from '@/pages/Dashboard'
 import KnowledgeBrowser from '@/pages/KnowledgeBrowser'
@@ -22,7 +26,26 @@ import Login from './pages/Login'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  if (localStorage.getItem('tkm_api_key') === null) {
+  // Verify against the server so both Bearer-key (superadmin) and OIDC
+  // session-cookie logins are recognized. null = checking.
+  const [authed, setAuthed] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let active = true
+    checkAuth()
+      .then(ok => { if (active) setAuthed(ok) })
+      .catch(() => { if (active) setAuthed(false) })
+    return () => { active = false }
+  }, [])
+
+  if (authed === null) {
+    return (
+      <Box sx={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress size={28} />
+      </Box>
+    )
+  }
+  if (!authed) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />
   }
   return <>{children}</>

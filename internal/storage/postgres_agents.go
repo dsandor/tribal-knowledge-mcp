@@ -88,6 +88,53 @@ func (s *PostgresStore) migrateAgents(ctx context.Context) error {
 
 // UpsertAgent inserts or updates an agent. If a.ID is empty, it looks up by
 // (domain, team_id) so that each team upserts its OWN agent per domain.
+// RenameDomain renames a domain across the team's entries, clusters, and agents
+// in one transaction. See AgentStore.RenameDomain for semantics.
+func (s *PostgresStore) RenameDomain(ctx context.Context, teamID, oldDomain, newDomain string) (RenameDomainResult, error) {
+	var res RenameDomainResult
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Guard against the agents (domain, team_id) uniqueness constraint: refuse
+	// the rename if the target domain is already taken by an agent in this team.
+	var conflicts int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM agents WHERE domain = $1 AND team_id = $2`,
+		newDomain, teamID).Scan(&conflicts); err != nil {
+		return res, fmt.Errorf("check domain conflict: %w", err)
+	}
+	if conflicts > 0 {
+		return res, ErrDomainExists
+	}
+
+	targets := []struct {
+		table string
+		out   *int
+	}{
+		{"entries", &res.Entries},
+		{"clusters", &res.Clusters},
+		{"agents", &res.Agents},
+	}
+	for _, t := range targets {
+		r, err := tx.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET domain = $1, updated_at = NOW() WHERE domain = $2 AND team_id = $3", t.table),
+			newDomain, oldDomain, teamID)
+		if err != nil {
+			return res, fmt.Errorf("rename domain in %s: %w", t.table, err)
+		}
+		n, _ := r.RowsAffected()
+		*t.out = int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return res, fmt.Errorf("commit: %w", err)
+	}
+	return res, nil
+}
+
 func (s *PostgresStore) UpsertAgent(ctx context.Context, a Agent) (string, error) {
 	if a.ID == "" {
 		existing, err := s.GetAgentByDomain(ctx, a.Domain, a.TeamID)

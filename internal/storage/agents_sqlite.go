@@ -56,6 +56,53 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, a Agent) (string, error) 
 	return a.ID, nil
 }
 
+// RenameDomain renames a domain across the team's entries, clusters, and agents
+// in one transaction. See AgentStore.RenameDomain for semantics.
+func (s *SQLiteStore) RenameDomain(ctx context.Context, teamID, oldDomain, newDomain string) (RenameDomainResult, error) {
+	var res RenameDomainResult
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Guard against the agents.domain UNIQUE(domain, team_id) constraint: refuse
+	// the rename if the target domain is already taken by an agent in this team.
+	var conflicts int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM agents WHERE domain = ? AND team_id = ?`,
+		newDomain, teamID).Scan(&conflicts); err != nil {
+		return res, fmt.Errorf("check domain conflict: %w", err)
+	}
+	if conflicts > 0 {
+		return res, ErrDomainExists
+	}
+
+	targets := []struct {
+		table string
+		out   *int
+	}{
+		{"entries", &res.Entries},
+		{"clusters", &res.Clusters},
+		{"agents", &res.Agents},
+	}
+	for _, t := range targets {
+		r, err := tx.ExecContext(ctx,
+			fmt.Sprintf("UPDATE %s SET domain = ?, updated_at = CURRENT_TIMESTAMP WHERE domain = ? AND team_id = ?", t.table),
+			newDomain, oldDomain, teamID)
+		if err != nil {
+			return res, fmt.Errorf("rename domain in %s: %w", t.table, err)
+		}
+		n, _ := r.RowsAffected()
+		*t.out = int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return res, fmt.Errorf("commit: %w", err)
+	}
+	return res, nil
+}
+
 func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, domain, version, status, system_prompt, instructions, anti_patterns,

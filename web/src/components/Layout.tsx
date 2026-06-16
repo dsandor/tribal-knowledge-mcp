@@ -12,6 +12,7 @@ import {
   Bot, BarChart2, Clock, Settings, Users, ShieldCheck, LogOut, Activity, KeyRound,
 } from 'lucide-react'
 import { Psychology as BrainIcon } from '@mui/icons-material'
+import { logout } from '@/lib/api'
 
 const DRAWER_WIDTH = 220
 
@@ -37,7 +38,9 @@ export default function Layout() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    // Clear the server session (OIDC/local) as well as the local Bearer key.
+    try { await logout() } catch { /* best effort */ }
     localStorage.removeItem('tkm_api_key')
     navigate('/login')
   }

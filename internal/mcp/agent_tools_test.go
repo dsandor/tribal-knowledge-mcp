@@ -33,6 +33,10 @@ func (m *mockAgentStore) UpsertAgent(_ context.Context, a storage.Agent) (string
 	return a.ID, nil
 }
 
+func (m *mockAgentStore) RenameDomain(_ context.Context, _, _, _ string) (storage.RenameDomainResult, error) {
+	return storage.RenameDomainResult{}, nil
+}
+
 func (m *mockAgentStore) GetAgent(_ context.Context, id string) (*storage.Agent, error) {
 	for _, a := range m.agents {
 		if a.ID == id {

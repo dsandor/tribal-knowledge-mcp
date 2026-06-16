@@ -119,7 +119,10 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 // ── Teams ─────────────────────────────────────────────────────────────────────
 
 func (s *PostgresStore) CreateTeam(ctx context.Context, t Team) (string, error) {
-	id := uuid.NewString()
+	id := t.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	patternsJSON, err := json.Marshal(t.DomainPatterns)
 	if err != nil {
 		return "", fmt.Errorf("marshal domain_patterns: %w", err)
@@ -474,6 +477,18 @@ func (s *PostgresStore) AssignUserToTeam(ctx context.Context, userID, teamID, ro
 	if n == 0 {
 		return fmt.Errorf("user %q: %w", userID, ErrNotFound)
 	}
+	return nil
+}
+
+func (s *PostgresStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE users SET team_id = $1, role = $2 WHERE id = $3 AND manually_assigned = FALSE",
+		teamID, role, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("auto-assign user to team: %w", err)
+	}
+	// Zero rows affected means the user was manually assigned; leave them be.
 	return nil
 }
 
