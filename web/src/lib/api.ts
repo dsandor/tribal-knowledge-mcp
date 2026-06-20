@@ -237,6 +237,21 @@ export const api = {
   pipeline: {
     status: (): Promise<PipelineStatus | { status: string }> => get('/pipeline/status'),
   },
+
+  admin: {
+    downloadBackup: () => {
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+      return downloadBlob('/admin/backup', `tribal-backup-${stamp}.tar.gz`)
+    },
+    restore: async (file: File, force: boolean): Promise<{ tables_restored: Record<string, number>; embeddings_restored: number }> => {
+      const fd = new FormData()
+      fd.append('archive', file)
+      const r = await apiFetch(`${BASE}/admin/restore?force=${force}`, { method: 'POST', body: fd })
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.message || `restore failed: ${r.status}`)
+      return body
+    },
+  },
 }
 
 // --- Auth ---

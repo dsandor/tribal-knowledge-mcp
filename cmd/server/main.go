@@ -77,6 +77,25 @@ func main() {
 		slog.Info("loaded environment from .env file", "path", envFile)
 	}
 
+	// Subcommand dispatch: export/import run an operation and exit. Must run
+	// before constructing the server store and starting the server.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "export":
+			if err := runExport(cfg, os.Args[2:]); err != nil {
+				slog.Error("export failed", "err", err)
+				os.Exit(1)
+			}
+			return
+		case "import":
+			if err := runImport(cfg, os.Args[2:]); err != nil {
+				slog.Error("import failed", "err", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	var store combinedStore
 	if cfg.DatabaseURL != "" {
 		pgStore, err := storage.NewPostgresStore(cfg.DatabaseURL, cfg.EmbeddingDim)
@@ -173,7 +192,8 @@ func main() {
 		WithRateLimitRPS(cfg.RateLimitRPS).
 		WithTrustXFF(cfg.TrustXFF).
 		WithLive(liveHub, presence).
-		WithAISources(src)
+		WithAISources(src).
+		WithBackupConfig(cfg.EmbeddingDim, version())
 
 	httpServer := &http.Server{
 		Addr:    cfg.HTTPAddr,

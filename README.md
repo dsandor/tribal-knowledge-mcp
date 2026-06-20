@@ -25,6 +25,7 @@ A general-purpose tribal knowledge server for teams that use LLMs. It captures w
   - [Cursor](#cursor)
   - [Remote Clients (HTTP/SSE)](#remote-clients-httpsse)
 - [First-Time Setup](#first-time-setup)
+- [Backup & Restore / Migration](#backup--restore--migration)
 - [MCP Tools Reference](#mcp-tools-reference)
 - [Building and Publishing Images](#building-and-publishing-images)
 - [License](#license)
@@ -443,6 +444,119 @@ curl -X POST http://localhost:8080/api/teams \
 ```
 
 After creating a team, generate per-user API keys through the web UI Settings page or REST API.
+
+---
+
+## Backup & Restore / Migration
+
+The server can produce a **full logical backup** of everything in the database and restore
+it into another instance — including across storage engines. The archive is an
+**engine-neutral** `tar.gz` (a manifest plus one JSONL file per table, with embeddings
+stored as plain float arrays), so a backup taken on SQLite can be restored into PostgreSQL
+and vice-versa.
+
+> **Security warning — treat the archive like a credential.** A backup contains
+> **secrets**: API key hashes, authentication configuration, and user password hashes.
+> It is a complete copy of every team's data. Transfer it only over secure channels and
+> store it with restricted permissions. The CLI writes backup files with mode `0600` and
+> prints a warning to that effect.
+
+**What's included:** all teams and all of their data — knowledge entries + embeddings,
+clusters, pipeline runs, dataset snapshots, analysis cache, rules, agents, agent versions,
+teams, users, API keys, auth config, team settings, and usage/activity history.
+**Excluded:** ephemeral login sessions (you log in again after a restore).
+
+### CLI: `export`
+
+The same `tribal-knowledge` binary that runs the server also handles backups via an
+`export` subcommand. It reads the storage configuration from the environment exactly like
+the server does (`DATABASE_URL` for PostgreSQL, otherwise SQLite at `DATABASE_PATH`).
+
+```bash
+# Write a timestamped archive to the current directory (backup-<timestamp>.tar.gz)
+./tribal-knowledge export
+
+# Choose the output path
+./tribal-knowledge export --out /backups/knowledge-2026-06-20.tar.gz
+
+# Stream the archive to stdout (e.g. to pipe into gpg or scp)
+./tribal-knowledge export --stdout > backup.tar.gz
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--out` | `backup-<timestamp>.tar.gz` | Output archive path. File is created with mode `0600`. |
+| `--stdout` | `false` | Write the archive to stdout instead of a file (no on-disk warning is printed). |
+
+### CLI: `import`
+
+Restore is a **full replace**: it truncates the target database and loads the archive's
+contents. Because this is destructive, a target that already contains data is **refused
+unless you pass `--force`**.
+
+```bash
+# Restore into an empty target
+./tribal-knowledge import --in backup.tar.gz
+
+# Overwrite a target that already has data
+./tribal-knowledge import --in backup.tar.gz --force
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--in` | — (**required**) | Path to the `.tar.gz` archive to restore. |
+| `--force` | `false` | Required to overwrite a non-empty target. Without it, restore aborts. |
+
+> **`EMBEDDING_DIM` must match.** The archive records the embedding dimension it was created
+> with. Restore is refused if the target's `EMBEDDING_DIM` differs from the archive's, since
+> stored vectors would otherwise be incompatible. Keep `EMBEDDING_DIM` identical across the
+> source and target.
+
+### Engine selection (environment)
+
+Both subcommands pick the storage backend the same way the server does:
+
+| Variable | Effect |
+|---|---|
+| `DATABASE_URL` | If set, PostgreSQL is used (connection string). |
+| `DATABASE_PATH` | SQLite file path used when `DATABASE_URL` is **not** set (config field `DBPath`, default `knowledge.db`). |
+| `EMBEDDING_DIM` | Vector dimension (default `768`). Must be identical on source and target for a restore. |
+
+### Recipe: migrate SQLite → PostgreSQL
+
+1. **Export from the SQLite instance.** Point at your existing `.db` file:
+
+   ```bash
+   DATABASE_PATH=./knowledge.db ./tribal-knowledge export --out backup.tar.gz
+   ```
+
+2. **Restore into the new PostgreSQL instance.** Provide the Postgres `DATABASE_URL` and the
+   **same** `EMBEDDING_DIM`, then force-overwrite the (fresh) target:
+
+   ```bash
+   DATABASE_URL=postgres://user:pass@host:5432/tribal \
+   EMBEDDING_DIM=768 \
+   ./tribal-knowledge import --in backup.tar.gz --force
+   ```
+
+The same recipe works in reverse (PostgreSQL → SQLite) — just swap which engine each step
+points at. The archive format is identical for both.
+
+> If you run the server with `go run ./cmd/server` instead of a built binary, the subcommands
+> are invoked the same way: `go run ./cmd/server export --out backup.tar.gz` and
+> `go run ./cmd/server import --in backup.tar.gz --force`.
+
+### Web UI (superadmin only)
+
+The **Settings** page has a **Backup & Restore** section, visible only to superadmins
+(enforced server-side):
+
+- **Download backup** — downloads the full archive (`GET /api/admin/backup`).
+- **Restore** — upload an archive to restore. A **Force overwrite** checkbox is required to
+  replace a database that already contains data (`POST /api/admin/restore?force=...`).
+
+Both endpoints are superadmin-only. The same security warning applies to downloads from the
+web UI: the file you receive contains secrets and must be protected accordingly.
 
 ---
 

@@ -23,12 +23,19 @@ func (s *PostgresStore) migrateRules(ctx context.Context) error {
 			priority    INT NOT NULL DEFAULT 0,
 			enabled     BOOLEAN NOT NULL DEFAULT TRUE,
 			author      TEXT NOT NULL DEFAULT '',
+			team_id     TEXT NOT NULL DEFAULT '',
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
 	`)
 	if err != nil {
 		return fmt.Errorf("create rules table: %w", err)
+	}
+	// Idempotent migration for pre-existing databases created before team_id
+	// existed. SQLite's rules table has team_id (added via ALTER), and the team
+	// queries plus restore depend on this column existing.
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE rules ADD COLUMN IF NOT EXISTS team_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("alter rules add team_id: %w", err)
 	}
 	return nil
 }

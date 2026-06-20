@@ -8,6 +8,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Full-Database Backup & Restore with Cross-Engine Migration**
+  - Logical full backup of every team and all data — knowledge entries + embeddings, clusters, pipeline runs, dataset snapshots, analysis cache, rules, agents, agent versions, teams, users, API keys, auth config, team settings, and usage/activity history (ephemeral login sessions excluded)
+  - Engine-neutral archive format (`tar.gz` of a manifest + per-table JSONL; embeddings as float arrays) that round-trips SQLite ↔ PostgreSQL, enabling SQLite → Postgres (and reverse) migration
+  - CLI subcommands on the server binary: `export [--out <file>] [--stdout]` (default `backup-<timestamp>.tar.gz`, written `0600`, with a secrets warning) and `import --in <file> [--force]`
+  - Restore is a full replace (truncate + load); a non-empty target is refused unless `--force`. Restore is also refused when the archive's `EMBEDDING_DIM` does not match the target
+  - Superadmin-only web "Backup & Restore" section on Settings: download backup + restore upload with a "Force overwrite" checkbox (`GET /api/admin/backup`, `POST /api/admin/restore?force=...`)
+  - Security: archives contain secrets (API key hashes, auth config, password hashes) and must be treated as credentials
 - **Knowledge Detail Editing, Curator Batch Actions & Search Highlighting (Phase 10)**
   - Knowledge detail page: inline edit mode (title, content, type, domain, tags, description), save/cancel, delete with inline confirmation
   - Similar entries panel on knowledge detail (top 3 semantic matches, hidden when empty)

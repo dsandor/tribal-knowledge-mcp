@@ -43,6 +43,8 @@ type Server struct {
 	aiSrc           *aiconfig.Sources // optional; enables the /refactor endpoint
 	hub             LiveHub
 	presence        *live.Presence
+	embeddingDim    int    // used by the backup/restore endpoints
+	appVersion      string // used by the backup/restore endpoints
 }
 
 // NewServer wires all routes and returns a ready Server.
@@ -83,6 +85,14 @@ func (s *Server) WithAISources(src *aiconfig.Sources) *Server {
 func (s *Server) WithLive(hub LiveHub, presence *live.Presence) *Server {
 	s.hub = hub
 	s.presence = presence
+	return s
+}
+
+// WithBackupConfig sets the embedding dimension and version string used by the
+// backup/restore endpoints. Does not affect routing.
+func (s *Server) WithBackupConfig(embeddingDim int, version string) *Server {
+	s.embeddingDim = embeddingDim
+	s.appVersion = version
 	return s
 }
 
@@ -150,6 +160,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // maxBodySize limits POST and PUT request bodies to 1 MiB.
 func maxBodySize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Restore uploads a full DB archive and must bypass the 1 MiB cap.
+		if r.URL.Path == "/api/admin/restore" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
 			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		}
@@ -255,6 +270,8 @@ func (s *Server) routes() {
 		r.Put("/api/admin/users/{id}/team", s.handleAdminAssignUserTeam)
 		r.Get("/api/admin/auth-config", s.handleGetAuthConfig)
 		r.Put("/api/admin/auth-config", s.handlePutAuthConfig)
+		r.Get("/api/admin/backup", s.handleBackupDownload)
+		r.Post("/api/admin/restore", s.handleRestoreUpload)
 	})
 
 	// SPA fallback

@@ -27,6 +27,7 @@ import MenuItem from '@mui/material/MenuItem';
 import InputLabel from '@mui/material/InputLabel';
 import FormControl from '@mui/material/FormControl';
 import FormHelperText from '@mui/material/FormHelperText';
+import BackupRestore from '../components/BackupRestore';
 
 interface TeamSettings {
   team_id?: string;
@@ -684,6 +685,12 @@ export default function Settings() {
           {saving ? 'Saving...' : 'Save Settings'}
         </Button>
       </Box>
+
+      {/* Backup & Restore (superadmin only — enforced server-side) */}
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, mt: 4 }}>
+        Server Administration
+      </Typography>
+      <BackupRestore />
 
       <Snackbar
         open={saved}
