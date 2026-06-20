@@ -26,6 +26,7 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { TagPill } from '@/components/ui/tag-pill'
+import { MarkdownView } from '@/components/ui/markdown-view'
 
 const KNOWLEDGE_TYPES = [
   'prompt_template',
@@ -323,7 +324,7 @@ export default function KnowledgeDetail() {
         <Card>
           <CardHeader title={<Typography variant="subtitle2">Description</Typography>} sx={{ pb: 0 }} />
           <CardContent>
-            <Typography variant="body2" color="text.secondary">{entry.Description}</Typography>
+            <MarkdownView content={entry.Description} />
           </CardContent>
         </Card>
       )}
@@ -331,14 +332,7 @@ export default function KnowledgeDetail() {
       <Card>
         <CardHeader title={<Typography variant="subtitle2">Content</Typography>} sx={{ pb: 0 }} />
         <CardContent>
-          <Typography
-            component="pre"
-            variant="body2"
-            color="text.secondary"
-            sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', lineHeight: 1.6, m: 0 }}
-          >
-            {entry.Content}
-          </Typography>
+          <MarkdownView content={entry.Content} />
         </CardContent>
       </Card>
 
