@@ -378,6 +378,34 @@ func (s *SQLiteStore) migrate() error {
 		return fmt.Errorf("backfill chunks: %w", err)
 	}
 
+	if err := s.migrateShares(); err != nil {
+		return fmt.Errorf("migrate shares: %w", err)
+	}
+
+	return nil
+}
+
+// migrateShares creates the cross-team knowledge sharing table and its index.
+func (s *SQLiteStore) migrateShares() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS knowledge_shares (
+			id                TEXT PRIMARY KEY,
+			entry_id          TEXT NOT NULL,
+			source_team_id    TEXT NOT NULL DEFAULT '',
+			created_by        TEXT NOT NULL DEFAULT '',
+			used_at           DATETIME,
+			used_by           TEXT NOT NULL DEFAULT '',
+			imported_entry_id TEXT NOT NULL DEFAULT '',
+			revoked_at        DATETIME,
+			created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_shares_entry ON knowledge_shares(entry_id)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("create knowledge_shares: %w", err)
+		}
+	}
 	return nil
 }
 

@@ -146,6 +146,22 @@ type ActivityEvent struct {
 	CreatedAt time.Time
 }
 
+// KnowledgeShare is a single-use, cross-team share token for a knowledge entry.
+// A user mints one of these for an entry; another user (any team) may import a
+// copy exactly once. After an import (UsedAt set) or a revoke (RevokedAt set)
+// the token is dead.
+type KnowledgeShare struct {
+	ID              string // random unguessable token (the share id)
+	EntryID         string
+	SourceTeamID    string
+	CreatedBy       string // user id
+	UsedAt          *time.Time
+	UsedBy          string // importing user id
+	ImportedEntryID string
+	RevokedAt       *time.Time
+	CreatedAt       time.Time
+}
+
 // VisibilityRule is a per-user suppression rule: knowledge matching the rule
 // is hidden from that user's results. RuleType scopes what Value matches.
 type VisibilityRule struct {
@@ -253,6 +269,14 @@ type Store interface {
 	AddVisibilityRule(ctx context.Context, userID, ruleType, value string) (VisibilityRule, error)
 	DeleteVisibilityRule(ctx context.Context, userID, ruleType, value string) error
 	ListVisibilityRules(ctx context.Context, userID string) ([]VisibilityRule, error)
+
+	// Cross-team knowledge sharing (single-use tokens).
+	CreateShare(ctx context.Context, entryID, sourceTeamID, createdBy string) (KnowledgeShare, error)
+	GetShare(ctx context.Context, id string) (*KnowledgeShare, error) // ErrNotFound if absent
+	// MarkShareUsed sets used_at/used_by/imported_entry_id; returns an error if the
+	// share is already used or revoked (callers rely on this for single-use safety).
+	MarkShareUsed(ctx context.Context, id, usedBy, importedEntryID string) error
+	RevokeShare(ctx context.Context, id string) error
 }
 
 // sha256Hex returns the lowercase hex-encoded SHA-256 digest of s.

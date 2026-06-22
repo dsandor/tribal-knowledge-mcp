@@ -239,6 +239,14 @@ func (m *mockAnalysisStore) DeleteVisibilityRule(_ context.Context, _, _, _ stri
 func (m *mockAnalysisStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
 	return nil, nil
 }
+func (m *mockAnalysisStore) CreateShare(_ context.Context, _, _, _ string) (storage.KnowledgeShare, error) {
+	return storage.KnowledgeShare{}, nil
+}
+func (m *mockAnalysisStore) GetShare(_ context.Context, _ string) (*storage.KnowledgeShare, error) {
+	return nil, storage.ErrNotFound
+}
+func (m *mockAnalysisStore) MarkShareUsed(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAnalysisStore) RevokeShare(_ context.Context, _ string) error         { return nil }
 func (m *mockAnalysisStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
 func (m *mockAnalysisStore) GetAnalysisCache(_ context.Context, kind, key string) (string, bool, error) {
 	m.cacheMu.Lock()

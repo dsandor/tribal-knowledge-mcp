@@ -157,6 +157,14 @@ func (m *mockStore) DeleteVisibilityRule(_ context.Context, userID, ruleType, va
 func (m *mockStore) ListVisibilityRules(_ context.Context, userID string) ([]storage.VisibilityRule, error) {
 	return m.visRules[userID], nil
 }
+func (m *mockStore) CreateShare(_ context.Context, _, _, _ string) (storage.KnowledgeShare, error) {
+	return storage.KnowledgeShare{}, nil
+}
+func (m *mockStore) GetShare(_ context.Context, _ string) (*storage.KnowledgeShare, error) {
+	return nil, storage.ErrNotFound
+}
+func (m *mockStore) MarkShareUsed(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockStore) RevokeShare(_ context.Context, _ string) error         { return nil }
 
 // GetUserByID lets the visibility helper resolve owner identities. The base
 // storage.Store interface does not require it; the helper type-asserts for it.
