@@ -250,6 +250,7 @@ func main() {
 	internalmcp.RegisterAgentTools(mcpServer, store)
 	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, src, liveHub)
 	internalmcp.RegisterVisibilityTools(mcpServer, store)
+	internalmcp.RegisterShareTools(mcpServer, store, src)
 	internalmcp.RegisterUsageTools(mcpServer, store, liveHub)
 	internalmcp.RegisterResources(mcpServer, store)
 	internalmcp.RegisterPromptSuggest(mcpServer, store, src)
