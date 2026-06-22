@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api, searchSimilar, addVisibilityRule, type KnowledgeEntry } from '@/lib/api'
-import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX } from 'lucide-react'
+import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX, Share2, Copy } from 'lucide-react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -82,6 +82,32 @@ export default function KnowledgeDetail() {
 
   // visibility (hide/mute) feedback
   const [visMsg, setVisMsg] = useState<string | null>(null)
+
+  // share dialog
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [sharing, setSharing] = useState(false)
+
+  const handleShare = async () => {
+    if (!entry) return
+    setSharing(true)
+    try {
+      const res = await api.share.create(entry.ID)
+      setShareUrl(`${window.location.origin}${res.url}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSharing(false)
+    }
+  }
+
+  const copyShareUrl = () => {
+    if (shareUrl) {
+      navigator.clipboard?.writeText(shareUrl).then(
+        () => setVisMsg('Share link copied'),
+        () => { /* clipboard may be unavailable; the field is still selectable */ },
+      )
+    }
+  }
 
   const handleHide = async () => {
     if (!entry) return
@@ -299,6 +325,9 @@ export default function KnowledgeDetail() {
         </IconButton>
         <Typography variant="h6" sx={{ fontWeight: 600, flex: 1 }}>{entry.Title}</Typography>
         <Chip label={entry.Type} size="small" />
+        <IconButton size="small" onClick={handleShare} disabled={sharing} title="Share with another team">
+          <Share2 style={{ width: 16, height: 16 }} />
+        </IconButton>
         <IconButton size="small" onClick={handleHide} title="Hide this item from my results">
           <EyeOff style={{ width: 16, height: 16 }} />
         </IconButton>
@@ -322,6 +351,32 @@ export default function KnowledgeDetail() {
         message={visMsg ?? ''}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
+
+      {/* Share link dialog */}
+      <Dialog open={shareUrl !== null} onClose={() => setShareUrl(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Share this knowledge</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Send this single-use link to a teammate on another team. They can import a copy
+            into their team once.
+          </DialogContentText>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              fullWidth
+              size="small"
+              value={shareUrl ?? ''}
+              slotProps={{ input: { readOnly: true } }}
+              onFocus={(e) => e.target.select()}
+            />
+            <IconButton onClick={copyShareUrl} title="Copy link">
+              <Copy style={{ width: 18, height: 18 }} />
+            </IconButton>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShareUrl(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Delete confirmation dialog */}
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>

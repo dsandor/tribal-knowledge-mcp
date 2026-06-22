@@ -226,6 +226,11 @@ func (s *Server) routes() {
 		r.Get("/api/visibility", s.handleListVisibility)
 		r.Post("/api/visibility", s.handleAddVisibility)
 		r.Delete("/api/visibility", s.handleDeleteVisibility)
+		// Cross-team sharing. View + import both require auth; the share token
+		// itself is the grant (no source-team access check on view/import).
+		r.Post("/api/knowledge/{id}/share", s.handleCreateShare)
+		r.Get("/api/share/{token}", s.handleGetShare)
+		r.Post("/api/share/{token}/import", s.handleImportShare)
 	})
 
 	// Curator routes
