@@ -9,6 +9,7 @@ import (
 
 	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/embedding"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	"github.com/dsandor/memory/internal/tags"
@@ -17,9 +18,11 @@ import (
 
 // storeResult is the JSON shape returned by the knowledge_store tool.
 type storeResult struct {
-	ID      string `json:"id"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
+	ID                 string `json:"id"`
+	Status             string `json:"status"`
+	Message            string `json:"message,omitempty"`
+	ChunkCount         int    `json:"chunk_count,omitempty"`
+	EmbeddingMaxTokens int    `json:"embedding_max_tokens,omitempty"`
 }
 
 func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...live.EventBus) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -94,12 +97,27 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 		if embedder == nil {
 			return mcplib.NewToolResultError("embedding not configured — set OLLAMA_URL to enable knowledge storage"), nil
 		}
-		emb, err := embedder.Embed(ctx, content)
-		if err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
+
+		// Split large content into per-chunk embeddings so nothing is lost to a
+		// single truncated vector. StoreEntryChunked is transactional, so on any
+		// per-chunk embed failure we bail out with no partial store.
+		cfg := src.ChunkConfig(ctx, teamID)
+		chunks := embedding.Chunk(content, cfg)
+		entryChunks := make([]storage.EntryChunk, 0, len(chunks))
+		for _, c := range chunks {
+			emb, err := embedder.Embed(ctx, c.Content)
+			if err != nil {
+				return mcplib.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
+			}
+			entryChunks = append(entryChunks, storage.EntryChunk{
+				Index:         c.Index,
+				Content:       c.Content,
+				TokenEstimate: c.TokenEstimate,
+				Embedding:     emb,
+			})
 		}
 
-		id, err := store.StoreEntry(ctx, entry, emb)
+		id, err := store.StoreEntryChunked(ctx, entry, entryChunks)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 		}
@@ -121,7 +139,12 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 			Title:   live.CapFragment(title),
 		})
 
-		out, _ := json.Marshal(storeResult{ID: id, Status: "stored"})
+		out, _ := json.Marshal(storeResult{
+			ID:                 id,
+			Status:             "stored",
+			ChunkCount:         len(entryChunks),
+			EmbeddingMaxTokens: cfg.MaxTokens,
+		})
 		return mcplib.NewToolResultText(string(out)), nil
 	}
 }

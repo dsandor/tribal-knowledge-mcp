@@ -19,10 +19,11 @@ import (
 // --- mock Store ---
 
 type mockStore struct {
-	entries   []storage.KnowledgeEntry
-	storeErr  error
-	listErr   error
-	deleteErr error
+	entries    []storage.KnowledgeEntry
+	storeErr   error
+	listErr    error
+	deleteErr  error
+	lastChunks []storage.EntryChunk // captured from the most recent StoreEntryChunked call
 }
 
 func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []float32) (string, error) {
@@ -38,6 +39,7 @@ func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []
 }
 
 func (m *mockStore) StoreEntryChunked(ctx context.Context, e storage.KnowledgeEntry, chunks []storage.EntryChunk) (string, error) {
+	m.lastChunks = chunks
 	var emb []float32
 	if len(chunks) > 0 {
 		emb = chunks[0].Embedding
@@ -169,6 +171,25 @@ func newTestSources(e embedding.Embedder, c llm.Client) *aiconfig.Sources {
 	}
 }
 
+// newChunkedTestSources builds a *aiconfig.Sources like newTestSources but with
+// a small embedding token budget so content larger than maxTokens is split into
+// multiple chunks by the store path.
+func newChunkedTestSources(e embedding.Embedder, maxTokens int) *aiconfig.Sources {
+	resolver := aiconfig.NewResolver(&fakeSettingsStore{}, aiconfig.EnvDefaults{
+		AnthropicAPIKey:    "test-key",
+		AnthropicModel:     "test-model",
+		OllamaURL:          "http://test-ollama",
+		OllamaModel:        "test-model",
+		EmbeddingMaxTokens: maxTokens,
+	})
+	return &aiconfig.Sources{
+		Resolver:    resolver,
+		LLM:         &fakeLLMProvider{c: nil},
+		Embed:       &fakeEmbedProvider{e: e},
+		DefaultTeam: "test",
+	}
+}
+
 // newNilEmbedSources builds a *aiconfig.Sources where OllamaURL is intentionally
 // empty so that Sources.Embedder always returns nil, simulating an unconfigured
 // embedding environment.
@@ -250,6 +271,88 @@ func TestHandleKnowledgeStore_Success(t *testing.T) {
 	responseText := textContent(result)
 	if responseText == "" {
 		t.Error("expected non-empty response text with entry ID")
+	}
+}
+
+func TestHandleKnowledgeStore_ChunksLargeContent(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	// Tiny token budget so multi-paragraph content must split. CountTokens is
+	// runes/4 and the chunker applies a 0.9 safety fraction, so a budget of 10
+	// tokens (~36 runes effective) forces several chunks for the content below.
+	handler := internalmcp.HandleKnowledgeStore(store, newChunkedTestSources(embedder, 10))
+
+	large := "First paragraph with enough words to matter here.\n\n" +
+		"Second paragraph that also carries meaningful content for chunking.\n\n" +
+		"Third paragraph rounding out the document so it clearly exceeds budget."
+	req := callReq(
+		"title", "Large Doc",
+		"content", large,
+		"type", "knowledge",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+
+	if len(store.lastChunks) <= 1 {
+		t.Fatalf("expected store to receive >1 chunk, got %d", len(store.lastChunks))
+	}
+
+	var res struct {
+		ChunkCount         int `json:"chunk_count"`
+		EmbeddingMaxTokens int `json:"embedding_max_tokens"`
+	}
+	if err := json.Unmarshal([]byte(textContent(result)), &res); err != nil {
+		t.Fatalf("parse result JSON: %v", err)
+	}
+	if res.ChunkCount <= 1 {
+		t.Errorf("chunk_count: got %d, want > 1", res.ChunkCount)
+	}
+	if res.ChunkCount != len(store.lastChunks) {
+		t.Errorf("chunk_count %d != chunks sent to store %d", res.ChunkCount, len(store.lastChunks))
+	}
+	if res.EmbeddingMaxTokens != 10 {
+		t.Errorf("embedding_max_tokens: got %d, want 10", res.EmbeddingMaxTokens)
+	}
+}
+
+func TestHandleKnowledgeStore_TinyContentSingleChunk(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	handler := internalmcp.HandleKnowledgeStore(store, newChunkedTestSources(embedder, 10))
+	req := callReq(
+		"title", "Tiny",
+		"content", "Short.",
+		"type", "knowledge",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+
+	if len(store.lastChunks) != 1 {
+		t.Fatalf("expected exactly 1 chunk, got %d", len(store.lastChunks))
+	}
+
+	var res struct {
+		ChunkCount int `json:"chunk_count"`
+	}
+	if err := json.Unmarshal([]byte(textContent(result)), &res); err != nil {
+		t.Fatalf("parse result JSON: %v", err)
+	}
+	if res.ChunkCount != 1 {
+		t.Errorf("chunk_count: got %d, want 1", res.ChunkCount)
 	}
 }
 
