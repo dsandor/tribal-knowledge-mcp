@@ -281,7 +281,14 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 func (m *mockStore) ListPipelineRuns(_ context.Context, _ string, _ int) ([]storage.PipelineRun, error) {
 	return nil, nil
 }
-func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error   { return nil }
+func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
+	return storage.VisibilityRule{}, nil
+}
+func (m *mockStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
+	return nil, nil
+}
 func (m *mockStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStore) GetAnalysisCache(_ context.Context, _, _ string) (string, bool, error) {
 	return "", false, nil

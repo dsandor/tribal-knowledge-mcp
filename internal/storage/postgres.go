@@ -141,6 +141,9 @@ func (s *PostgresStore) migrate() error {
 	if err := s.migrateSearch(context.Background()); err != nil {
 		return fmt.Errorf("migrate search: %w", err)
 	}
+	if err := s.migrateVisibility(context.Background()); err != nil {
+		return fmt.Errorf("migrate visibility: %w", err)
+	}
 	if err := s.backfillChunks(context.Background()); err != nil {
 		return fmt.Errorf("backfill chunks: %w", err)
 	}

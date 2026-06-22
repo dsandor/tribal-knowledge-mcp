@@ -146,6 +146,16 @@ type ActivityEvent struct {
 	CreatedAt time.Time
 }
 
+// VisibilityRule is a per-user suppression rule: knowledge matching the rule
+// is hidden from that user's results. RuleType scopes what Value matches.
+type VisibilityRule struct {
+	ID        string
+	UserID    string
+	RuleType  string // "item" | "author" | "tag" | "domain"
+	Value     string
+	CreatedAt time.Time
+}
+
 // AnalysisStore extends Store with methods needed by the analysis pipeline.
 type AnalysisStore interface {
 	Store
@@ -238,6 +248,11 @@ type Store interface {
 	// GetEntryByContentHash returns the first entry whose content_hash matches SHA256(title+content).
 	// Returns nil, nil if no match.
 	GetEntryByContentHash(ctx context.Context, hash string) (*KnowledgeEntry, error)
+
+	// Per-user visibility (suppression) rules.
+	AddVisibilityRule(ctx context.Context, userID, ruleType, value string) (VisibilityRule, error)
+	DeleteVisibilityRule(ctx context.Context, userID, ruleType, value string) error
+	ListVisibilityRules(ctx context.Context, userID string) ([]VisibilityRule, error)
 }
 
 // sha256Hex returns the lowercase hex-encoded SHA-256 digest of s.

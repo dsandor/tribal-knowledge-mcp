@@ -120,6 +120,13 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 	return nil, nil
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
+	return storage.VisibilityRule{}, nil
+}
+func (m *mockStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
+	return nil, nil
+}
 
 // --- mock Embedder ---
 

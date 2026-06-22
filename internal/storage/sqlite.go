@@ -179,6 +179,23 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS user_visibility_rules (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL,
+			rule_type  TEXT NOT NULL,
+			value      TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, rule_type, value)
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create user_visibility_rules table: %w", err)
+	}
+	if _, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_uvr_user ON user_visibility_rules(user_id)`); err != nil {
+		return fmt.Errorf("create idx_uvr_user index: %w", err)
+	}
+
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS rules (
 			id          TEXT    PRIMARY KEY,
 			title       TEXT    NOT NULL,

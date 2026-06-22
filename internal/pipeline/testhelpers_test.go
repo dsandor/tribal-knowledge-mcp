@@ -232,6 +232,13 @@ func (m *mockAnalysisStore) BulkImport(_ context.Context, _ []storage.KnowledgeE
 	return 0, 0, nil, nil
 }
 func (m *mockAnalysisStore) BackfillTeamID(_ context.Context, _ string) error   { return nil }
+func (m *mockAnalysisStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
+	return storage.VisibilityRule{}, nil
+}
+func (m *mockAnalysisStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAnalysisStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
+	return nil, nil
+}
 func (m *mockAnalysisStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
 func (m *mockAnalysisStore) GetAnalysisCache(_ context.Context, kind, key string) (string, bool, error) {
 	m.cacheMu.Lock()
