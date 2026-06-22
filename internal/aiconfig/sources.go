@@ -160,6 +160,26 @@ func (s *Sources) Embedder(ctx context.Context, teamID string) embedding.Embedde
 	return s.Embed.Embedder(cfg.OllamaURL.Effective, cfg.OllamaModel.Effective)
 }
 
+// ChunkConfig returns the effective content-chunking configuration for teamID,
+// resolved as saved team value (when > 0) over env default. On resolution error
+// it returns a zero-value ChunkConfig (callers should treat that as "unset").
+// If teamID is empty, DefaultTeam is used as a fallback.
+func (s *Sources) ChunkConfig(ctx context.Context, teamID string) embedding.ChunkConfig {
+	if teamID == "" {
+		teamID = s.DefaultTeam
+	}
+	cfg, err := s.Resolver.Effective(ctx, teamID)
+	if err != nil {
+		slog.Warn("aiconfig: resolve effective config for ChunkConfig", "team", teamID, "err", err)
+		return embedding.ChunkConfig{}
+	}
+	return embedding.ChunkConfig{
+		MaxTokens:     cfg.EmbeddingMaxTokens,
+		OverlapTokens: cfg.ChunkOverlapTokens,
+		MaxChunks:     cfg.MaxChunks,
+	}
+}
+
 // LLMFingerprint returns a stable identifier for the effective LLM
 // provider+model used for teamID's touchpoint work, for cache
 // discrimination. Returns "" when config cannot be resolved.

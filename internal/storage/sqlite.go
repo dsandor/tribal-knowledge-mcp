@@ -333,6 +333,9 @@ func (s *SQLiteStore) migrate() error {
 		"ALTER TABLE team_settings ADD COLUMN llm_provider       TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE team_settings ADD COLUMN ollama_llm_model   TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE team_settings ADD COLUMN ai_touchpoints     TEXT NOT NULL DEFAULT '{}'",
+		"ALTER TABLE team_settings ADD COLUMN embedding_max_tokens INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE team_settings ADD COLUMN chunk_overlap_tokens INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE team_settings ADD COLUMN max_chunks           INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, alter := range teamSettingsAlters {
 		if _, err := s.db.Exec(alter); err != nil {

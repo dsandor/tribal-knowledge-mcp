@@ -30,9 +30,28 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		LLMProvider     string                          `json:"llm_provider"`
 		OllamaLLMModel  string                          `json:"ollama_llm_model"`
 		AITouchpoints   map[string]storage.AITouchpoint `json:"ai_touchpoints"`
+		// Per-team embedding/chunking config. 0 means "unset → env default".
+		EmbeddingMaxTokens int `json:"embedding_max_tokens"`
+		ChunkOverlapTokens int `json:"chunk_overlap_tokens"`
+		MaxChunks          int `json:"max_chunks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad_request", "invalid JSON body")
+		return
+	}
+
+	// Validate embedding/chunking ints: reject negatives. 0 is allowed and means
+	// "unset → fall back to the env default".
+	if body.EmbeddingMaxTokens < 0 {
+		writeError(w, 400, "bad_request", "embedding_max_tokens must be >= 0")
+		return
+	}
+	if body.ChunkOverlapTokens < 0 {
+		writeError(w, 400, "bad_request", "chunk_overlap_tokens must be >= 0")
+		return
+	}
+	if body.MaxChunks < 0 {
+		writeError(w, 400, "bad_request", "max_chunks must be >= 0")
 		return
 	}
 
@@ -93,6 +112,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		LLMProvider:        body.LLMProvider,
 		OllamaLLMModel:     body.OllamaLLMModel,
 		AITouchpoints:      aiTouchpoints,
+		EmbeddingMaxTokens: body.EmbeddingMaxTokens,
+		ChunkOverlapTokens: body.ChunkOverlapTokens,
+		MaxChunks:          body.MaxChunks,
 	}
 	if settings.ClusterThreshold == 0 {
 		settings.ClusterThreshold = 0.85

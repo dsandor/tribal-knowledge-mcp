@@ -75,6 +75,10 @@ type TeamSettings struct {
 	OllamaModel        string `json:"ollama_model"`
 	LLMProvider        string `json:"llm_provider"`     // "" | "anthropic" | "ollama"; empty means anthropic
 	OllamaLLMModel     string `json:"ollama_llm_model"` // chat model; distinct from OllamaModel (embeddings)
+	// Per-team embedding/chunking config. 0 means "unset → fall back to env default".
+	EmbeddingMaxTokens int `json:"embedding_max_tokens"`
+	ChunkOverlapTokens int `json:"chunk_overlap_tokens"`
+	MaxChunks          int `json:"max_chunks"`
 	// AITouchpoints maps touchpoint name to per-touchpoint AI config.
 	// Valid keys: "analysis", "agents", "improvement", "enrichment".
 	AITouchpoints map[string]AITouchpoint `json:"ai_touchpoints"`

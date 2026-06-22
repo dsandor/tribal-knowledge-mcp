@@ -75,6 +75,9 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 				ollama_model         TEXT NOT NULL DEFAULT '',
 				llm_provider         TEXT NOT NULL DEFAULT '',
 				ollama_llm_model     TEXT NOT NULL DEFAULT '',
+				embedding_max_tokens INT NOT NULL DEFAULT 0,
+				chunk_overlap_tokens INT NOT NULL DEFAULT 0,
+				max_chunks           INT NOT NULL DEFAULT 0,
 				updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			)`},
 		{"team_settings_anthropic_api_key", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS anthropic_api_key TEXT NOT NULL DEFAULT ''`},
@@ -84,6 +87,9 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 		{"team_settings_llm_provider", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS llm_provider       TEXT NOT NULL DEFAULT ''`},
 		{"team_settings_ollama_llm_model", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ollama_llm_model   TEXT NOT NULL DEFAULT ''`},
 		{"team_settings_ai_touchpoints", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS ai_touchpoints TEXT NOT NULL DEFAULT '{}'`},
+		{"team_settings_embedding_max_tokens", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS embedding_max_tokens INT NOT NULL DEFAULT 0`},
+		{"team_settings_chunk_overlap_tokens", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS chunk_overlap_tokens INT NOT NULL DEFAULT 0`},
+		{"team_settings_max_chunks", `ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS max_chunks INT NOT NULL DEFAULT 0`},
 		{"auth_config", `
 			CREATE TABLE IF NOT EXISTS auth_config (
 				id                INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -649,7 +655,8 @@ func (s *PostgresStore) GetTeamSettings(ctx context.Context, teamID string) (*Te
 	row := s.db.QueryRowContext(ctx, `
 		SELECT team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
 		       anthropic_api_key, anthropic_model, ollama_url, ollama_model,
-		       llm_provider, ollama_llm_model, ai_touchpoints, updated_at
+		       llm_provider, ollama_llm_model, ai_touchpoints,
+		       embedding_max_tokens, chunk_overlap_tokens, max_chunks, updated_at
 		FROM team_settings WHERE team_id = $1
 	`, teamID)
 	var ts TeamSettings
@@ -658,7 +665,8 @@ func (s *PostgresStore) GetTeamSettings(ctx context.Context, teamID string) (*Te
 	err := row.Scan(
 		&ts.TeamID, &domainsRaw, &ts.ClusterThreshold, &ts.PipelineMinEntries, &ts.AgentModel,
 		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel,
-		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsRaw, &updatedAt,
+		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsRaw,
+		&ts.EmbeddingMaxTokens, &ts.ChunkOverlapTokens, &ts.MaxChunks, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -706,9 +714,10 @@ func (s *PostgresStore) PutTeamSettings(ctx context.Context, ts TeamSettings) er
 		INSERT INTO team_settings (
 			team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
 			anthropic_api_key, anthropic_model, ollama_url, ollama_model,
-			llm_provider, ollama_llm_model, ai_touchpoints, updated_at
+			llm_provider, ollama_llm_model, ai_touchpoints,
+			embedding_max_tokens, chunk_overlap_tokens, max_chunks, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
 		ON CONFLICT (team_id) DO UPDATE SET
 			domains              = EXCLUDED.domains,
 			cluster_threshold    = EXCLUDED.cluster_threshold,
@@ -721,10 +730,14 @@ func (s *PostgresStore) PutTeamSettings(ctx context.Context, ts TeamSettings) er
 			llm_provider         = EXCLUDED.llm_provider,
 			ollama_llm_model     = EXCLUDED.ollama_llm_model,
 			ai_touchpoints       = EXCLUDED.ai_touchpoints,
+			embedding_max_tokens = EXCLUDED.embedding_max_tokens,
+			chunk_overlap_tokens = EXCLUDED.chunk_overlap_tokens,
+			max_chunks           = EXCLUDED.max_chunks,
 			updated_at           = NOW()
 	`, ts.TeamID, string(domainsJSON), ts.ClusterThreshold, ts.PipelineMinEntries, ts.AgentModel,
 		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel,
-		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON))
+		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON),
+		ts.EmbeddingMaxTokens, ts.ChunkOverlapTokens, ts.MaxChunks)
 	if err != nil {
 		return fmt.Errorf("put team settings: %w", err)
 	}

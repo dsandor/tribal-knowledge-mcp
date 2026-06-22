@@ -157,13 +157,16 @@ func main() {
 	// Build the AI sources layer. Clients are resolved per call so saved team
 	// settings (AI config) take effect immediately without a restart.
 	envDefaults := aiconfig.EnvDefaults{
-		AnthropicAPIKey: cfg.AnthropicAPIKey,
-		AnthropicModel:  cfg.AnthropicModel,
-		AgentModel:      cfg.AgentModel,
-		OllamaURL:       cfg.OllamaURL,
-		OllamaModel:     cfg.OllamaModel,
-		LLMProvider:     cfg.LLMProvider,
-		OllamaLLMModel:  cfg.OllamaLLMModel,
+		AnthropicAPIKey:    cfg.AnthropicAPIKey,
+		AnthropicModel:     cfg.AnthropicModel,
+		AgentModel:         cfg.AgentModel,
+		OllamaURL:          cfg.OllamaURL,
+		OllamaModel:        cfg.OllamaModel,
+		LLMProvider:        cfg.LLMProvider,
+		OllamaLLMModel:     cfg.OllamaLLMModel,
+		EmbeddingMaxTokens: cfg.EmbeddingMaxTokens,
+		ChunkOverlapTokens: cfg.ChunkOverlapTokens,
+		MaxChunks:          cfg.MaxChunks,
 	}
 	resolver := aiconfig.NewResolver(store, envDefaults)
 	src := &aiconfig.Sources{

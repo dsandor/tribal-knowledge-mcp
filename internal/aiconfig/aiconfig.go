@@ -35,6 +35,12 @@ type EffectiveConfig struct {
 	// Valid keys: "analysis", "agents", "improvement", "enrichment".
 	// No env layer — only saved team settings populate this map.
 	AITouchpoints map[string]storage.AITouchpoint `json:"ai_touchpoints"`
+	// Embedding/chunking config. Resolved as: saved team value if > 0, else the
+	// env default. (Plain ints rather than FieldValue: there is no per-source
+	// presentation requirement and 0 unambiguously means "unset".)
+	EmbeddingMaxTokens int `json:"embedding_max_tokens"`
+	ChunkOverlapTokens int `json:"chunk_overlap_tokens"`
+	MaxChunks          int `json:"max_chunks"`
 }
 
 // EnvDefaults carries the process-environment-derived defaults captured at
@@ -48,6 +54,10 @@ type EnvDefaults struct {
 	OllamaModel     string
 	LLMProvider     string
 	OllamaLLMModel  string
+	// Embedding/chunking env defaults.
+	EmbeddingMaxTokens int
+	ChunkOverlapTokens int
+	MaxChunks          int
 }
 
 // SettingsStore is the narrow storage interface required by the Resolver.
@@ -94,16 +104,28 @@ func (r *Resolver) Effective(ctx context.Context, teamID string) (*EffectiveConf
 	}
 
 	cfg := &EffectiveConfig{
-		AnthropicAPIKey: resolve(saved.AnthropicAPIKey, r.env.AnthropicAPIKey),
-		AnthropicModel:  resolve(saved.AnthropicModel, r.env.AnthropicModel),
-		AgentModel:      resolve(saved.AgentModel, r.env.AgentModel),
-		OllamaURL:       resolve(saved.OllamaURL, r.env.OllamaURL),
-		OllamaModel:     resolve(saved.OllamaModel, r.env.OllamaModel),
-		LLMProvider:     resolve(saved.LLMProvider, r.env.LLMProvider),
-		OllamaLLMModel:  resolve(saved.OllamaLLMModel, r.env.OllamaLLMModel),
-		AITouchpoints:   touchpoints,
+		AnthropicAPIKey:    resolve(saved.AnthropicAPIKey, r.env.AnthropicAPIKey),
+		AnthropicModel:     resolve(saved.AnthropicModel, r.env.AnthropicModel),
+		AgentModel:         resolve(saved.AgentModel, r.env.AgentModel),
+		OllamaURL:          resolve(saved.OllamaURL, r.env.OllamaURL),
+		OllamaModel:        resolve(saved.OllamaModel, r.env.OllamaModel),
+		LLMProvider:        resolve(saved.LLMProvider, r.env.LLMProvider),
+		OllamaLLMModel:     resolve(saved.OllamaLLMModel, r.env.OllamaLLMModel),
+		AITouchpoints:      touchpoints,
+		EmbeddingMaxTokens: resolveInt(saved.EmbeddingMaxTokens, r.env.EmbeddingMaxTokens),
+		ChunkOverlapTokens: resolveInt(saved.ChunkOverlapTokens, r.env.ChunkOverlapTokens),
+		MaxChunks:          resolveInt(saved.MaxChunks, r.env.MaxChunks),
 	}
 	return cfg, nil
+}
+
+// resolveInt returns the saved value if it is greater than zero, otherwise the
+// environment default. A saved value of 0 means "unset → fall back to env".
+func resolveInt(saved, env int) int {
+	if saved > 0 {
+		return saved
+	}
+	return env
 }
 
 // resolve builds a FieldValue by merging a single saved value with the

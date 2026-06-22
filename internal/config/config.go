@@ -15,6 +15,9 @@ type Config struct {
 	OllamaModel        string
 	TeamID             string
 	EmbeddingDim       int
+	EmbeddingMaxTokens int // EMBEDDING_MAX_TOKENS — per-chunk token budget (default 8192)
+	ChunkOverlapTokens int // EMBEDDING_CHUNK_OVERLAP — overlap tokens between chunks (default 128)
+	MaxChunks          int // EMBEDDING_MAX_CHUNKS — max chunks per content (default 64)
 	AnthropicAPIKey    string
 	AnthropicModel     string
 	AgentModel         string
@@ -85,6 +88,42 @@ func Load() (Config, error) {
 		dim = parsed
 	}
 
+	embeddingMaxTokens := 8192
+	if v := os.Getenv("EMBEDDING_MAX_TOKENS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_MAX_TOKENS %q: must be a positive integer", v)
+		}
+		if parsed <= 0 {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_MAX_TOKENS %d: must be positive", parsed)
+		}
+		embeddingMaxTokens = parsed
+	}
+
+	chunkOverlapTokens := 128
+	if v := os.Getenv("EMBEDDING_CHUNK_OVERLAP"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_CHUNK_OVERLAP %q: must be a non-negative integer", v)
+		}
+		if parsed < 0 {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_CHUNK_OVERLAP %d: must be non-negative", parsed)
+		}
+		chunkOverlapTokens = parsed
+	}
+
+	maxChunks := 64
+	if v := os.Getenv("EMBEDDING_MAX_CHUNKS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_MAX_CHUNKS %q: must be a positive integer", v)
+		}
+		if parsed <= 0 {
+			return Config{}, fmt.Errorf("invalid EMBEDDING_MAX_CHUNKS %d: must be positive", parsed)
+		}
+		maxChunks = parsed
+	}
+
 	minEntries := 10
 	if v := os.Getenv("PIPELINE_MIN_ENTRIES"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -135,6 +174,9 @@ func Load() (Config, error) {
 		OllamaModel:        envOrDefault("OLLAMA_MODEL", "nomic-embed-text"),
 		TeamID:             envOrDefault("TEAM_ID", "default"),
 		EmbeddingDim:       dim,
+		EmbeddingMaxTokens: embeddingMaxTokens,
+		ChunkOverlapTokens: chunkOverlapTokens,
+		MaxChunks:          maxChunks,
 		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		AnthropicModel:     envOrDefault("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
 		AgentModel:         envOrDefault("AGENT_MODEL", "claude-sonnet-4-6"),

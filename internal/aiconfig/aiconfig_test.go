@@ -281,3 +281,53 @@ func TestEffectiveLLMProviderAndOllamaModel(t *testing.T) {
 		}
 	})
 }
+
+// TestChunkConfigResolution verifies that the embedding/chunking int fields
+// resolve as: saved value when > 0, else the env default (0 means unset).
+func TestChunkConfigResolution(t *testing.T) {
+	envD := aiconfig.EnvDefaults{
+		EmbeddingMaxTokens: 8192,
+		ChunkOverlapTokens: 128,
+		MaxChunks:          64,
+	}
+
+	t.Run("no saved value falls back to env defaults", func(t *testing.T) {
+		r := aiconfig.NewResolver(&fakeStore{settings: &storage.TeamSettings{TeamID: "t1"}}, envD)
+		cfg, err := r.Effective(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.EmbeddingMaxTokens != 8192 {
+			t.Errorf("EmbeddingMaxTokens = %d, want 8192", cfg.EmbeddingMaxTokens)
+		}
+		if cfg.ChunkOverlapTokens != 128 {
+			t.Errorf("ChunkOverlapTokens = %d, want 128", cfg.ChunkOverlapTokens)
+		}
+		if cfg.MaxChunks != 64 {
+			t.Errorf("MaxChunks = %d, want 64", cfg.MaxChunks)
+		}
+	})
+
+	t.Run("saved value wins over env default", func(t *testing.T) {
+		saved := &storage.TeamSettings{
+			TeamID:             "t1",
+			EmbeddingMaxTokens: 4096,
+			ChunkOverlapTokens: 256,
+			MaxChunks:          16,
+		}
+		r := aiconfig.NewResolver(&fakeStore{settings: saved}, envD)
+		cfg, err := r.Effective(context.Background(), "t1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.EmbeddingMaxTokens != 4096 {
+			t.Errorf("EmbeddingMaxTokens = %d, want 4096", cfg.EmbeddingMaxTokens)
+		}
+		if cfg.ChunkOverlapTokens != 256 {
+			t.Errorf("ChunkOverlapTokens = %d, want 256", cfg.ChunkOverlapTokens)
+		}
+		if cfg.MaxChunks != 16 {
+			t.Errorf("MaxChunks = %d, want 16", cfg.MaxChunks)
+		}
+	})
+}
