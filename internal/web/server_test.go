@@ -24,6 +24,13 @@ type mockStore struct {
 	snaps      []storage.DatasetSnapshot
 	run        *storage.PipelineRun
 	lastFilter storage.ListFilter // captured by ListEntries
+	// apiKeyUserID, when non-empty, makes GetAPIKeyByHash return a user-scoped
+	// key so the request carries that UserID (exercises per-user visibility).
+	apiKeyUserID string
+	// visRules maps a user id to that user's suppression rules.
+	visRules map[string][]storage.VisibilityRule
+	// users maps a user id to a stored User (for owner-identity resolution).
+	users map[string]storage.User
 }
 
 // --- AgentStore / AnalysisStore / Store methods ---
@@ -209,6 +216,9 @@ func (m *mockStore) UpsertUser(_ context.Context, u storage.User) (string, error
 	return "", nil
 }
 func (m *mockStore) GetUserByID(_ context.Context, id string) (*storage.User, error) {
+	if u, ok := m.users[id]; ok {
+		return &u, nil
+	}
 	return nil, storage.ErrNotFound
 }
 func (m *mockStore) GetUserByEmail(_ context.Context, email string) (*storage.User, error) {
@@ -232,8 +242,10 @@ func (m *mockStore) ResolveTeamByEmail(_ context.Context, email string) (*storag
 func (m *mockStore) CreateAPIKey(_ context.Context, key storage.APIKey) error { return nil }
 
 // GetAPIKeyByHash returns a valid admin API key for any hash — allows tests to pass auth middleware.
+// When apiKeyUserID is set the key is user-scoped, so the request's TeamContext
+// carries that UserID and the per-user visibility filter activates.
 func (m *mockStore) GetAPIKeyByHash(_ context.Context, hash string) (*storage.APIKey, error) {
-	return &storage.APIKey{ID: "test-key", TeamID: "test-team", Role: "admin", KeyHash: hash}, nil
+	return &storage.APIKey{ID: "test-key", TeamID: "test-team", Role: "admin", KeyHash: hash, UserID: m.apiKeyUserID}, nil
 }
 func (m *mockStore) ListAPIKeys(_ context.Context, teamID string) ([]storage.APIKey, error) {
 	return nil, nil
@@ -286,8 +298,8 @@ func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storag
 	return storage.VisibilityRule{}, nil
 }
 func (m *mockStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
-	return nil, nil
+func (m *mockStore) ListVisibilityRules(_ context.Context, userID string) ([]storage.VisibilityRule, error) {
+	return m.visRules[userID], nil
 }
 func (m *mockStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStore) GetAnalysisCache(_ context.Context, _, _ string) (string, bool, error) {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	tagspkg "github.com/dsandor/memory/internal/tags"
+	"github.com/dsandor/memory/internal/visibility"
 )
 
 // publishLive publishes a live event to the hub if one is configured.
@@ -92,6 +94,26 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// callerVisibility builds the calling user's compiled suppression RuleSet.
+// It returns a zero (no-op) RuleSet — which hides nothing — when the caller is
+// not user-scoped (tc.UserID == "") or when the rules cannot be loaded. Owner
+// identities (id/email/name) are included so a user's own entries are never
+// hidden.
+func (s *Server) callerVisibility(ctx context.Context, tc auth.TeamContext) visibility.RuleSet {
+	if tc.UserID == "" {
+		return visibility.RuleSet{}
+	}
+	rules, err := s.store.ListVisibilityRules(ctx, tc.UserID)
+	if err != nil {
+		return visibility.RuleSet{}
+	}
+	identities := []string{tc.UserID}
+	if u, err := s.store.GetUserByID(ctx, tc.UserID); err == nil && u != nil {
+		identities = append(identities, u.Email, u.Name)
+	}
+	return visibility.Compile(rules, identities...)
+}
+
 func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
 	q := r.URL.Query()
@@ -116,6 +138,8 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list entries: %v", err))
 		return
 	}
+	// Per-user suppression (no-op when the caller is not user-scoped).
+	entries = visibility.FilterEntries(s.callerVisibility(r.Context(), tc), entries)
 	if entries == nil {
 		entries = []storage.KnowledgeEntry{}
 	}

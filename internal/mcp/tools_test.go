@@ -24,6 +24,11 @@ type mockStore struct {
 	listErr    error
 	deleteErr  error
 	lastChunks []storage.EntryChunk // captured from the most recent StoreEntryChunked call
+	// visRules maps a user id to that user's suppression rules (used by the
+	// per-user visibility filter tests). nil for all other users.
+	visRules map[string][]storage.VisibilityRule
+	// users maps a user id to a stored User (for owner-identity resolution).
+	users map[string]storage.User
 }
 
 func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []float32) (string, error) {
@@ -124,8 +129,17 @@ func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storag
 	return storage.VisibilityRule{}, nil
 }
 func (m *mockStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
-	return nil, nil
+func (m *mockStore) ListVisibilityRules(_ context.Context, userID string) ([]storage.VisibilityRule, error) {
+	return m.visRules[userID], nil
+}
+
+// GetUserByID lets the visibility helper resolve owner identities. The base
+// storage.Store interface does not require it; the helper type-asserts for it.
+func (m *mockStore) GetUserByID(_ context.Context, id string) (*storage.User, error) {
+	if u, ok := m.users[id]; ok {
+		return &u, nil
+	}
+	return nil, storage.ErrNotFound
 }
 
 // --- mock Embedder ---

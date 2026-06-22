@@ -13,6 +13,7 @@ import (
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	"github.com/dsandor/memory/internal/tags"
+	"github.com/dsandor/memory/internal/visibility"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -202,6 +203,9 @@ func HandleKnowledgeList(store storage.Store) func(context.Context, mcplib.CallT
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 		}
+
+		// Per-user suppression (no-op for team tokens / stdio).
+		entries = visibility.FilterEntries(callerVisibility(ctx, store), entries)
 
 		data, _ := json.Marshal(entries)
 		return mcplib.NewToolResultText(string(data)), nil
