@@ -9,7 +9,7 @@ import Divider from '@mui/material/Divider'
 import Typography from '@mui/material/Typography'
 import {
   LayoutDashboard, BookOpen, Upload, Network, Database,
-  Bot, BarChart2, Clock, Settings, Users, ShieldCheck, LogOut, Activity, KeyRound,
+  Bot, BarChart2, Clock, Settings, Users, ShieldCheck, LogOut, Activity, KeyRound, EyeOff,
 } from 'lucide-react'
 import { Psychology as BrainIcon } from '@mui/icons-material'
 import { logout } from '@/lib/api'
@@ -26,6 +26,7 @@ const nav = [
   { to: '/agents', label: 'Agents', Icon: Bot },
   { to: '/analytics', label: 'Analytics', Icon: BarChart2 },
   { to: '/pending', label: 'Pending Queue', Icon: Clock },
+  { to: '/my-visibility', label: 'My Visibility', Icon: EyeOff },
   { to: '/settings', label: 'Settings', Icon: Settings },
   { to: '/api-keys', label: 'API Keys', Icon: KeyRound },
   { to: '/users', label: 'Users', Icon: Users },

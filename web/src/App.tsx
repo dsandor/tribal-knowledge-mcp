@@ -22,6 +22,7 @@ import Import from './pages/Import'
 import Pipeline from './pages/Pipeline'
 import APIKeys from './pages/APIKeys'
 import Users from './pages/Users'
+import MyVisibility from './pages/MyVisibility'
 import Login from './pages/Login'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -86,6 +87,7 @@ export default function App() {
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="api-keys" element={<APIKeys />} />
           <Route path="users" element={<Users />} />
+          <Route path="my-visibility" element={<MyVisibility />} />
         </Route>
       </Routes>
     </BrowserRouter>

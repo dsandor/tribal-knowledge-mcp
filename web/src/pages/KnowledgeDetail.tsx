@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { api, searchSimilar, type KnowledgeEntry } from '@/lib/api'
-import { ArrowLeft, Star, Pencil, Trash2 } from 'lucide-react'
+import { api, searchSimilar, addVisibilityRule, type KnowledgeEntry } from '@/lib/api'
+import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX } from 'lucide-react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -22,6 +22,7 @@ import List from '@mui/material/List'
 import ListItem from '@mui/material/ListItem'
 import MenuItem from '@mui/material/MenuItem'
 import Select from '@mui/material/Select'
+import Snackbar from '@mui/material/Snackbar'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -78,6 +79,29 @@ export default function KnowledgeDetail() {
 
   // similar entries
   const [similar, setSimilar] = useState<KnowledgeEntry[]>([])
+
+  // visibility (hide/mute) feedback
+  const [visMsg, setVisMsg] = useState<string | null>(null)
+
+  const handleHide = async () => {
+    if (!entry) return
+    try {
+      await addVisibilityRule('item', entry.ID)
+      setVisMsg('Item hidden from your results')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const handleMuteAuthor = async () => {
+    if (!entry || !entry.Author) return
+    try {
+      await addVisibilityRule('author', entry.Author)
+      setVisMsg(`Muted author "${entry.Author}"`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   useEffect(() => {
     if (!id) return
@@ -275,6 +299,14 @@ export default function KnowledgeDetail() {
         </IconButton>
         <Typography variant="h6" sx={{ fontWeight: 600, flex: 1 }}>{entry.Title}</Typography>
         <Chip label={entry.Type} size="small" />
+        <IconButton size="small" onClick={handleHide} title="Hide this item from my results">
+          <EyeOff style={{ width: 16, height: 16 }} />
+        </IconButton>
+        {entry.Author && (
+          <IconButton size="small" onClick={handleMuteAuthor} title={`Mute author "${entry.Author}"`}>
+            <UserX style={{ width: 16, height: 16 }} />
+          </IconButton>
+        )}
         <IconButton size="small" onClick={startEdit} title="Edit">
           <Pencil style={{ width: 16, height: 16 }} />
         </IconButton>
@@ -282,6 +314,14 @@ export default function KnowledgeDetail() {
           <Trash2 style={{ width: 16, height: 16 }} />
         </IconButton>
       </Box>
+
+      <Snackbar
+        open={visMsg !== null}
+        autoHideDuration={3000}
+        onClose={() => setVisMsg(null)}
+        message={visMsg ?? ''}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
 
       {/* Delete confirmation dialog */}
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>

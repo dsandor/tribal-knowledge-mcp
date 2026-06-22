@@ -677,3 +677,40 @@ export async function fetchActivity(limit = 20, offset = 0): Promise<ActivityEve
   if (!r.ok) throw new Error('fetch activity failed');
   return r.json();
 }
+
+// --- Per-user visibility rules ---
+export type VisibilityRuleType = 'item' | 'author' | 'tag' | 'domain'
+
+export interface VisibilityRule {
+  rule_type: VisibilityRuleType
+  value: string
+  created_at: string
+}
+
+export async function listVisibility(): Promise<VisibilityRule[]> {
+  const r = await apiFetch('/api/visibility');
+  if (!r.ok) throw new Error('list visibility failed');
+  return r.json();
+}
+
+export async function addVisibilityRule(rule_type: VisibilityRuleType, value: string): Promise<VisibilityRule> {
+  const r = await apiFetch('/api/visibility', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_type, value }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'add visibility rule failed');
+  }
+  return r.json();
+}
+
+export async function deleteVisibilityRule(rule_type: VisibilityRuleType, value: string): Promise<void> {
+  const r = await apiFetch('/api/visibility', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_type, value }),
+  });
+  if (!r.ok) throw new Error('delete visibility rule failed');
+}

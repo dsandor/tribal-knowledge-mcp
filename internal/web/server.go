@@ -223,6 +223,9 @@ func (s *Server) routes() {
 		r.Get("/api/knowledge/trending", s.handleKnowledgeTrending)
 		r.Get("/api/activity", s.handleActivityFeed)
 		r.Get("/api/activity/stream", s.handleActivityStream)
+		r.Get("/api/visibility", s.handleListVisibility)
+		r.Post("/api/visibility", s.handleAddVisibility)
+		r.Delete("/api/visibility", s.handleDeleteVisibility)
 	})
 
 	// Curator routes
