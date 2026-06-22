@@ -37,6 +37,18 @@ func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []
 	return e.ID, nil
 }
 
+func (m *mockStore) StoreEntryChunked(ctx context.Context, e storage.KnowledgeEntry, chunks []storage.EntryChunk) (string, error) {
+	var emb []float32
+	if len(chunks) > 0 {
+		emb = chunks[0].Embedding
+	}
+	return m.StoreEntry(ctx, e, emb)
+}
+
+func (m *mockStore) ReplaceEntryChunks(_ context.Context, _ string, _ []storage.EntryChunk) error {
+	return nil
+}
+
 func (m *mockStore) GetEntry(_ context.Context, id string) (*storage.KnowledgeEntry, error) {
 	for _, e := range m.entries {
 		if e.ID == id {

@@ -133,7 +133,13 @@ func (s *SQLiteStore) LoadEmbeddings(ctx context.Context, items []EmbeddingItem)
 			return fmt.Errorf("insert entry_embeddings: %w", err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Rebuild chunk rows (entry_chunks + vec_chunks) from the restored entries and
+	// per-entry embeddings so chunk-based similarity search works after restore.
+	// Idempotent: only entries without chunks are touched.
+	return s.backfillChunks()
 }
 
 func (s *SQLiteStore) IsEmpty(ctx context.Context) (bool, error) {
@@ -170,7 +176,7 @@ func (s *SQLiteStore) TruncateAll(ctx context.Context, tablesInInsertOrder []str
 		_, err := conn.ExecContext(ctx, "DELETE FROM "+t)
 		return err
 	}
-	for _, t := range []string{"vec_entries", "entry_embeddings"} {
+	for _, t := range []string{"vec_chunks", "entry_chunks", "vec_entries", "entry_embeddings"} {
 		if err := del(t); err != nil {
 			return err
 		}

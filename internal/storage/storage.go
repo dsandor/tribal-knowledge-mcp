@@ -49,6 +49,16 @@ type SearchResult struct {
 	Score float64
 }
 
+// EntryChunk is one embedded slice of a knowledge entry's content.
+// Index 0 is the representative chunk (used for pipeline clustering and the
+// legacy per-entry vector). An entry that fits in one chunk has exactly one.
+type EntryChunk struct {
+	Index         int
+	Content       string
+	TokenEstimate int
+	Embedding     []float32 // len must equal the store's embeddingDim, or nil
+}
+
 type ListFilter struct {
 	Domain string
 	Type   KnowledgeType
@@ -172,6 +182,13 @@ type Store interface {
 	// StoreEntry always creates a new entry, assigning a fresh UUID as ID.
 	// The ID field on the passed entry is ignored. Returns the assigned ID.
 	StoreEntry(ctx context.Context, entry KnowledgeEntry, embedding []float32) (string, error)
+	// StoreEntryChunked creates a new entry whose content is represented by one
+	// or more embedding vectors (chunks). chunks[0] is the representative chunk.
+	// Assigns a fresh UUID; entry.ID is ignored. Returns the new ID.
+	StoreEntryChunked(ctx context.Context, entry KnowledgeEntry, chunks []EntryChunk) (string, error)
+	// ReplaceEntryChunks atomically replaces all chunks (and vectors) for an
+	// existing entry. Used when content is edited. Returns ErrNotFound if absent.
+	ReplaceEntryChunks(ctx context.Context, entryID string, chunks []EntryChunk) error
 	GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error)
 	ListEntries(ctx context.Context, filter ListFilter) ([]KnowledgeEntry, error)
 	DeleteEntry(ctx context.Context, id string) error

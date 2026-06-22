@@ -94,6 +94,12 @@ func (m *mockStore) ListSnapshots(_ context.Context, teamID string) ([]storage.D
 func (m *mockStore) StoreEntry(_ context.Context, _ storage.KnowledgeEntry, _ []float32) (string, error) {
 	return "x", nil
 }
+func (m *mockStore) StoreEntryChunked(_ context.Context, _ storage.KnowledgeEntry, _ []storage.EntryChunk) (string, error) {
+	return "x", nil
+}
+func (m *mockStore) ReplaceEntryChunks(_ context.Context, _ string, _ []storage.EntryChunk) error {
+	return nil
+}
 func (m *mockStore) GetEntry(_ context.Context, id string) (*storage.KnowledgeEntry, error) {
 	for i := range m.entries {
 		if m.entries[i].ID == id {

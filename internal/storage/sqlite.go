@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -75,6 +76,30 @@ func (s *SQLiteStore) migrate() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("create entry_embeddings table: %w", err)
+	}
+
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS entry_chunks (
+			rowid          INTEGER PRIMARY KEY AUTOINCREMENT,
+			entry_id       TEXT    NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			chunk_index    INTEGER NOT NULL,
+			content        TEXT    NOT NULL,
+			token_estimate INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(entry_id, chunk_index)
+		);`)
+	if err != nil {
+		return fmt.Errorf("create entry_chunks table: %w", err)
+	}
+	_, err = s.db.Exec(fmt.Sprintf(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
+			embedding FLOAT[%d]
+		);`, s.embeddingDim))
+	if err != nil {
+		return fmt.Errorf("create vec_chunks table: %w", err)
+	}
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_entry_chunks_entry ON entry_chunks(entry_id)`)
+	if err != nil {
+		return fmt.Errorf("create idx_entry_chunks_entry: %w", err)
 	}
 
 	// Idempotent ALTER TABLE — ignore "duplicate column name" errors.
@@ -329,6 +354,10 @@ func (s *SQLiteStore) migrate() error {
 		return fmt.Errorf("migrate agents team unique: %w", err)
 	}
 
+	if err := s.backfillChunks(); err != nil {
+		return fmt.Errorf("backfill chunks: %w", err)
+	}
+
 	return nil
 }
 
@@ -413,9 +442,21 @@ func (s *SQLiteStore) migrateUsageTracking() error {
 	return nil
 }
 
+// StoreEntry creates a new entry with a single embedding (legacy single-chunk
+// path). It delegates to StoreEntryChunked.
 func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embedding []float32) (string, error) {
-	if embedding != nil && len(embedding) != s.embeddingDim {
-		return "", fmt.Errorf("embedding dim mismatch: got %d, want %d", len(embedding), s.embeddingDim)
+	return s.StoreEntryChunked(ctx, entry, []EntryChunk{{Index: 0, Content: entry.Content, Embedding: embedding}})
+}
+
+// StoreEntryChunked creates a new entry represented by one or more chunks.
+// chunks[0] is the representative chunk: its vector is also written to
+// vec_entries/entry_embeddings so the pipeline's per-entry embedding queries
+// keep working.
+func (s *SQLiteStore) StoreEntryChunked(ctx context.Context, entry KnowledgeEntry, chunks []EntryChunk) (string, error) {
+	for _, c := range chunks {
+		if c.Embedding != nil && len(c.Embedding) != s.embeddingDim {
+			return "", fmt.Errorf("embedding dim mismatch: got %d, want %d", len(c.Embedding), s.embeddingDim)
+		}
 	}
 
 	entry.ID = uuid.NewString()
@@ -447,32 +488,188 @@ func (s *SQLiteStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embe
 		return "", fmt.Errorf("insert entry: %w", err)
 	}
 
-	if embedding != nil {
-		rowID, err := res.LastInsertId()
-		if err != nil {
-			return "", fmt.Errorf("last insert id: %w", err)
-		}
+	entryRowID, err := res.LastInsertId()
+	if err != nil {
+		return "", fmt.Errorf("last insert id: %w", err)
+	}
 
-		blob, err := vec.SerializeFloat32(embedding)
+	// Representative chunk: write per-entry vector for the pipeline.
+	if len(chunks) > 0 && chunks[0].Embedding != nil {
+		blob, err := vec.SerializeFloat32(chunks[0].Embedding)
 		if err != nil {
 			return "", fmt.Errorf("serialize embedding: %w", err)
 		}
-
-		_, err = tx.ExecContext(ctx, `INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)`, rowID, blob)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)`, entryRowID, blob); err != nil {
 			return "", fmt.Errorf("insert vec_entries: %w", err)
 		}
-
-		_, err = tx.ExecContext(ctx, `INSERT INTO entry_embeddings (rowid, embedding) VALUES (?, ?)`, rowID, blob)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO entry_embeddings (rowid, embedding) VALUES (?, ?)`, entryRowID, blob); err != nil {
 			return "", fmt.Errorf("insert entry_embeddings: %w", err)
 		}
+	}
+
+	if err := insertChunksTx(ctx, tx, entry.ID, chunks); err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return entry.ID, nil
+}
+
+// insertChunksTx inserts each chunk into entry_chunks and, for chunks with a
+// non-nil embedding, into vec_chunks keyed by the new entry_chunks rowid.
+func insertChunksTx(ctx context.Context, tx *sql.Tx, entryID string, chunks []EntryChunk) error {
+	for _, c := range chunks {
+		cres, err := tx.ExecContext(ctx, `
+			INSERT INTO entry_chunks (entry_id, chunk_index, content, token_estimate)
+			VALUES (?, ?, ?, ?)
+		`, entryID, c.Index, c.Content, c.TokenEstimate)
+		if err != nil {
+			return fmt.Errorf("insert entry_chunks: %w", err)
+		}
+		if c.Embedding == nil {
+			continue
+		}
+		chunkRowID, err := cres.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("chunk last insert id: %w", err)
+		}
+		blob, err := vec.SerializeFloat32(c.Embedding)
+		if err != nil {
+			return fmt.Errorf("serialize chunk embedding: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)`, chunkRowID, blob); err != nil {
+			return fmt.Errorf("insert vec_chunks: %w", err)
+		}
+	}
+	return nil
+}
+
+// ReplaceEntryChunks atomically swaps all chunks (and their vectors) for an
+// existing entry, and refreshes the representative per-entry vector from
+// chunks[0].
+func (s *SQLiteStore) ReplaceEntryChunks(ctx context.Context, entryID string, chunks []EntryChunk) error {
+	for _, c := range chunks {
+		if c.Embedding != nil && len(c.Embedding) != s.embeddingDim {
+			return fmt.Errorf("embedding dim mismatch: got %d, want %d", len(c.Embedding), s.embeddingDim)
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var entryRowID int64
+	err = tx.QueryRowContext(ctx, `SELECT rowid FROM entries WHERE id = ?`, entryID).Scan(&entryRowID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("entry %q: %w", entryID, ErrNotFound)
+		}
+		return fmt.Errorf("find entry rowid: %w", err)
+	}
+
+	// Drop existing chunk vectors then chunk rows.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM vec_chunks
+		WHERE rowid IN (SELECT rowid FROM entry_chunks WHERE entry_id = ?)`, entryID); err != nil {
+		return fmt.Errorf("delete vec_chunks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entry_chunks WHERE entry_id = ?`, entryID); err != nil {
+		return fmt.Errorf("delete entry_chunks: %w", err)
+	}
+
+	if err := insertChunksTx(ctx, tx, entryID, chunks); err != nil {
+		return err
+	}
+
+	// Refresh the representative per-entry vector.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vec_entries WHERE rowid = ?`, entryRowID); err != nil {
+		return fmt.Errorf("delete vec_entries: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entry_embeddings WHERE rowid = ?`, entryRowID); err != nil {
+		return fmt.Errorf("delete entry_embeddings: %w", err)
+	}
+	if len(chunks) > 0 && chunks[0].Embedding != nil {
+		blob, err := vec.SerializeFloat32(chunks[0].Embedding)
+		if err != nil {
+			return fmt.Errorf("serialize embedding: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO vec_entries (rowid, embedding) VALUES (?, ?)`, entryRowID, blob); err != nil {
+			return fmt.Errorf("insert vec_entries: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO entry_embeddings (rowid, embedding) VALUES (?, ?)`, entryRowID, blob); err != nil {
+			return fmt.Errorf("insert entry_embeddings: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// backfillChunks creates a chunk-0 row for every entry that has none, copying
+// the per-entry embedding (if present) into vec_chunks. Idempotent.
+func (s *SQLiteStore) backfillChunks() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`
+		SELECT e.id, e.content, ee.embedding
+		FROM entries e
+		LEFT JOIN entry_embeddings ee ON ee.rowid = e.rowid
+		WHERE NOT EXISTS (SELECT 1 FROM entry_chunks ec WHERE ec.entry_id = e.id)
+	`)
+	if err != nil {
+		return fmt.Errorf("scan entries for backfill: %w", err)
+	}
+
+	type pending struct {
+		id      string
+		content string
+		blob    []byte
+	}
+	var todo []pending
+	for rows.Next() {
+		var p pending
+		var blob []byte
+		if err := rows.Scan(&p.id, &p.content, &blob); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan backfill row: %w", err)
+		}
+		p.blob = blob
+		todo = append(todo, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, p := range todo {
+		cres, err := tx.Exec(`
+			INSERT INTO entry_chunks (entry_id, chunk_index, content, token_estimate)
+			VALUES (?, 0, ?, 0)
+		`, p.id, p.content)
+		if err != nil {
+			return fmt.Errorf("backfill insert entry_chunks: %w", err)
+		}
+		if p.blob == nil {
+			continue
+		}
+		chunkRowID, err := cres.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("backfill chunk last insert id: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)`, chunkRowID, p.blob); err != nil {
+			return fmt.Errorf("backfill insert vec_chunks: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error) {
@@ -667,6 +864,13 @@ func (s *SQLiteStore) DeleteEntry(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM entry_embeddings WHERE rowid = ?", rowID); err != nil {
 		return fmt.Errorf("delete entry_embeddings: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM vec_chunks WHERE rowid IN (SELECT rowid FROM entry_chunks WHERE entry_id = ?)`, id); err != nil {
+		return fmt.Errorf("delete vec_chunks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM entry_chunks WHERE entry_id = ?", id); err != nil {
+		return fmt.Errorf("delete entry_chunks: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE id = ?", id); err != nil {
 		return fmt.Errorf("delete entry: %w", err)
 	}
@@ -683,97 +887,97 @@ func (s *SQLiteStore) SearchSimilar(ctx context.Context, embedding []float32, to
 		return nil, fmt.Errorf("serialize query embedding: %w", err)
 	}
 
+	// Query the chunk vectors. An entry may have several chunks, so we ask for
+	// more chunk hits than topK to give dedup room, then collapse to entries
+	// keeping the minimum distance per entry.
+	k := topK * 4
+	if k < topK {
+		k = topK
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT rowid, distance
-		FROM vec_entries
-		WHERE embedding MATCH ?
+		SELECT vc.rowid, vc.distance, ec.entry_id
+		FROM vec_chunks vc
+		JOIN entry_chunks ec ON ec.rowid = vc.rowid
+		WHERE vc.embedding MATCH ?
 		AND k = ?
-		ORDER BY distance
-	`, blob, topK)
+		ORDER BY vc.distance
+	`, blob, k)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 	defer rows.Close()
 
-	type rowResult struct {
-		rowID    int64
-		distance float64
-	}
-	var rowResults []rowResult
+	// Dedup to one best (minimum) distance per entry_id, preserving the order in
+	// which each entry's best distance was first seen (ascending distance).
+	bestDist := make(map[string]float64)
+	var order []string
 	for rows.Next() {
-		var r rowResult
-		if err := rows.Scan(&r.rowID, &r.distance); err != nil {
+		var chunkRowID int64
+		var distance float64
+		var entryID string
+		if err := rows.Scan(&chunkRowID, &distance, &entryID); err != nil {
 			return nil, fmt.Errorf("scan vec result: %w", err)
 		}
-		rowResults = append(rowResults, r)
+		if d, ok := bestDist[entryID]; !ok {
+			bestDist[entryID] = distance
+			order = append(order, entryID)
+		} else if distance < d {
+			bestDist[entryID] = distance
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	if len(rowResults) == 0 {
+	if len(order) == 0 {
 		return []SearchResult{}, nil
 	}
 
-	// Collect rowIDs in distance order for the IN query.
-	rowIDs := make([]int64, len(rowResults))
-	for i, r := range rowResults {
-		rowIDs[i] = r.rowID
+	// Stable sort entries by ascending best distance (order already ascending,
+	// but min-update may have lowered a later entry — re-sort to be safe).
+	sort.SliceStable(order, func(i, j int) bool {
+		return bestDist[order[i]] < bestDist[order[j]]
+	})
+	if len(order) > topK {
+		order = order[:topK]
 	}
 
-	placeholders := make([]string, len(rowIDs))
-	args := make([]any, len(rowIDs))
-	for i, id := range rowIDs {
+	placeholders := make([]string, len(order))
+	args := make([]any, len(order))
+	for i, id := range order {
 		placeholders[i] = "?"
 		args[i] = id
 	}
 
 	rows2, err := s.db.QueryContext(ctx,
-		fmt.Sprintf(`SELECT rowid, id, type, title, content, description, domain, tags, auto_tags, author, team,
+		fmt.Sprintf(`SELECT id, type, title, content, description, domain, tags, auto_tags, author, team,
 		                    created_at, updated_at, version, rating, usage_count, team_id, status
-		             FROM entries WHERE rowid IN (%s)`, strings.Join(placeholders, ",")),
+		             FROM entries WHERE id IN (%s)`, strings.Join(placeholders, ",")),
 		args...)
 	if err != nil {
-		return nil, fmt.Errorf("fetch entries by rowid: %w", err)
+		return nil, fmt.Errorf("fetch entries by id: %w", err)
 	}
 	defer rows2.Close()
 
-	entryMap := make(map[int64]*KnowledgeEntry, len(rowIDs))
+	entryMap := make(map[string]*KnowledgeEntry, len(order))
 	for rows2.Next() {
-		var e KnowledgeEntry
-		var tagsJSON string
-		var autoTagsJSON string
-		var createdAt, updatedAt string
-		var rid int64
-		if err := rows2.Scan(
-			&rid, &e.ID, &e.Type, &e.Title, &e.Content, &e.Description,
-			&e.Domain, &tagsJSON, &autoTagsJSON, &e.Author, &e.Team,
-			&createdAt, &updatedAt, &e.Version,
-			&e.Rating, &e.UsageCount, &e.TeamID, &e.Status,
-		); err != nil {
-			return nil, fmt.Errorf("scan entry for rowid %d: %w", rid, err)
+		e, err := scanEntry(rows2)
+		if err != nil {
+			return nil, fmt.Errorf("scan search entry: %w", err)
 		}
-		if err := json.Unmarshal([]byte(tagsJSON), &e.Tags); err != nil {
-			e.Tags = []string{}
-		}
-		if err := json.Unmarshal([]byte(autoTagsJSON), &e.AutoTags); err != nil {
-			e.AutoTags = []string{}
-		}
-		e.CreatedAt = parseTimestamp(createdAt)
-		e.UpdatedAt = parseTimestamp(updatedAt)
-		entryMap[rid] = &e
+		entryMap[e.ID] = e
 	}
 	if err := rows2.Err(); err != nil {
 		return nil, fmt.Errorf("rows error after fetch: %w", err)
 	}
 
-	results := make([]SearchResult, 0, len(rowResults))
-	for _, r := range rowResults {
-		e, ok := entryMap[r.rowID]
+	results := make([]SearchResult, 0, len(order))
+	for _, id := range order {
+		e, ok := entryMap[id]
 		if !ok {
-			return nil, fmt.Errorf("scan entry for rowid %d: %w", r.rowID, ErrNotFound)
+			return nil, fmt.Errorf("entry %q: %w", id, ErrNotFound)
 		}
-		results = append(results, SearchResult{Entry: *e, Score: r.distance})
+		results = append(results, SearchResult{Entry: *e, Score: bestDist[id]})
 	}
 	return results, nil
 }

@@ -188,6 +188,12 @@ func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, teamID string, l
 func (m *mockAnalysisStore) StoreEntry(_ context.Context, _ storage.KnowledgeEntry, _ []float32) (string, error) {
 	return "", nil
 }
+func (m *mockAnalysisStore) StoreEntryChunked(_ context.Context, _ storage.KnowledgeEntry, _ []storage.EntryChunk) (string, error) {
+	return "", nil
+}
+func (m *mockAnalysisStore) ReplaceEntryChunks(_ context.Context, _ string, _ []storage.EntryChunk) error {
+	return nil
+}
 func (m *mockAnalysisStore) GetEntry(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
 	return nil, nil
 }
