@@ -125,10 +125,35 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 	return nil, nil
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
-func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
-	return storage.VisibilityRule{}, nil
+func (m *mockStore) AddVisibilityRule(_ context.Context, userID, ruleType, value string) (storage.VisibilityRule, error) {
+	if m.visRules == nil {
+		m.visRules = map[string][]storage.VisibilityRule{}
+	}
+	for _, r := range m.visRules[userID] {
+		if r.RuleType == ruleType && r.Value == value {
+			return r, nil // idempotent
+		}
+	}
+	r := storage.VisibilityRule{
+		ID:        "vis-" + userID + "-" + ruleType + "-" + value,
+		UserID:    userID,
+		RuleType:  ruleType,
+		Value:     value,
+		CreatedAt: time.Now(),
+	}
+	m.visRules[userID] = append(m.visRules[userID], r)
+	return r, nil
 }
-func (m *mockStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockStore) DeleteVisibilityRule(_ context.Context, userID, ruleType, value string) error {
+	rules := m.visRules[userID]
+	for i, r := range rules {
+		if r.RuleType == ruleType && r.Value == value {
+			m.visRules[userID] = append(rules[:i], rules[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
 func (m *mockStore) ListVisibilityRules(_ context.Context, userID string) ([]storage.VisibilityRule, error) {
 	return m.visRules[userID], nil
 }
