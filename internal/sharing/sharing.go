@@ -20,6 +20,10 @@ import (
 // failure.
 var ErrSameTeam = errors.New("share already belongs to the destination team; no import needed")
 
+// ErrShareNotFound is returned by Import when the share token does not exist.
+// Callers should map this to a 404; it never embeds the token value.
+var ErrShareNotFound = errors.New("share not found")
+
 // CreateShare creates a single-use cross-team share token for entryID owned by
 // sourceTeamID. The caller is expected to have already verified that createdBy
 // can access the entry; we still pass sourceTeamID (the entry's team) through so
@@ -44,7 +48,7 @@ func Import(ctx context.Context, store storage.Store, src *aiconfig.Sources, sha
 	share, err := store.GetShare(ctx, shareID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			return "", fmt.Errorf("share not found")
+			return "", ErrShareNotFound
 		}
 		return "", fmt.Errorf("load share: %w", err)
 	}
@@ -61,6 +65,9 @@ func Import(ctx context.Context, store storage.Store, src *aiconfig.Sources, sha
 			return "", fmt.Errorf("shared entry no longer exists")
 		}
 		return "", fmt.Errorf("load shared entry: %w", err)
+	}
+	if srcEntry == nil {
+		return "", fmt.Errorf("shared entry no longer exists")
 	}
 
 	// Resolve the destination team's embedder before claiming the token so an

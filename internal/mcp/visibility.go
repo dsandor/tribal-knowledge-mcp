@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/storage"
@@ -28,6 +29,8 @@ func callerVisibility(ctx context.Context, store storage.Store) visibility.RuleS
 	}
 	rules, err := store.ListVisibilityRules(ctx, tc.UserID)
 	if err != nil {
+		slog.Warn("visibility filter failing open: could not load rules",
+			"user_id", tc.UserID, "error", err)
 		return visibility.RuleSet{}
 	}
 	identities := []string{tc.UserID}

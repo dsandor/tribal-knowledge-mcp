@@ -105,6 +105,8 @@ func (s *Server) callerVisibility(ctx context.Context, tc auth.TeamContext) visi
 	}
 	rules, err := s.store.ListVisibilityRules(ctx, tc.UserID)
 	if err != nil {
+		slog.Warn("visibility filter failing open: could not load rules",
+			"user_id", tc.UserID, "error", err)
 		return visibility.RuleSet{}
 	}
 	identities := []string{tc.UserID}

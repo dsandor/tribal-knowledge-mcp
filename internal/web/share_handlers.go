@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -118,8 +119,16 @@ func (s *Server) handleImportShare(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"status": "already_yours"})
 			return
 		}
-		// Used / revoked / not-found / embedding-not-configured → conflict.
-		writeError(w, 409, "conflict", err.Error())
+		// Unknown token → 404.
+		if errors.Is(err, sharing.ErrShareNotFound) {
+			writeError(w, 404, "not_found", "share not found")
+			return
+		}
+		// Used / revoked / embedding-not-configured → conflict. Return a FIXED
+		// client message: the underlying err can embed the share token verbatim
+		// (storage's "share %q is not available" wrap), so we must not echo it.
+		slog.Warn("share import failed", "error", err)
+		writeError(w, 409, "conflict", "share is no longer available")
 		return
 	}
 	writeJSON(w, map[string]any{

@@ -86,6 +86,10 @@ func (s *Server) handleAddVisibility(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "value is required")
 		return
 	}
+	if len(body.Value) > 500 {
+		writeError(w, 400, "bad_request", "value too long")
+		return
+	}
 	rule, err := s.store.AddVisibilityRule(r.Context(), userID, body.RuleType, body.Value)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("add visibility rule: %v", err))
