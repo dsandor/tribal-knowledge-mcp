@@ -8,6 +8,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Large Knowledge Items via Transparent Multi-Vector Chunking**
+  - Knowledge content of any size is accepted; items larger than the embedding model's context window are automatically split into multiple coherent chunks internally, each embedded as its own vector, so nothing is silently truncated/lost. The item remains a single logical entry (one ID, rating, and usage count)
+  - New `entry_chunks` + per-chunk vector tables (`vec_chunks` for SQLite, `chunk_embeddings` for Postgres); semantic search runs over chunks and dedupes to one best-scoring result per entry. Existing entries are backfilled to a single chunk on migration
+  - Per-team, env-defaulted configuration (Settings UI + env): `EMBEDDING_MAX_TOKENS` (default 8192), `EMBEDDING_CHUNK_OVERLAP` (default 128), `EMBEDDING_MAX_CHUNKS` (default 64); `0` on a team falls back to the env default
+  - The `knowledge_store` MCP tool description is rewritten per request to telegraph the requesting team's effective size limit, so clients stop pre-trimming or splitting content
+  - `knowledge_store` now reports `chunk_count` and `embedding_max_tokens` in its result
+  - Fix: editing a knowledge entry's content now re-chunks and re-embeds it (previously the stored vector went stale after an edit); backup restore also rebuilds chunk vectors
 - **Full-Database Backup & Restore with Cross-Engine Migration**
   - Logical full backup of every team and all data — knowledge entries + embeddings, clusters, pipeline runs, dataset snapshots, analysis cache, rules, agents, agent versions, teams, users, API keys, auth config, team settings, and usage/activity history (ephemeral login sessions excluded)
   - Engine-neutral archive format (`tar.gz` of a manifest + per-table JSONL; embeddings as float arrays) that round-trips SQLite ↔ PostgreSQL, enabling SQLite → Postgres (and reverse) migration
