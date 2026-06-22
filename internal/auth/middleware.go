@@ -17,6 +17,7 @@ type TeamContext struct {
 	TeamID  string
 	KeyID   string // set for API key requests
 	UserID  string // set for session requests
+	KeyType string // "team" | "user" — only set for API key requests
 	Role    string // member|curator|admin|superadmin
 	Display string // human-readable name: key.Name (bearer) or UserID (session)
 }
@@ -103,7 +104,7 @@ func RequireAuth(store AuthStore, hooks ...PresenceToucher) func(http.Handler) h
 					if display == "" {
 						display = key.ID
 					}
-					tc := TeamContext{TeamID: key.TeamID, KeyID: key.ID, Role: key.Role, Display: display}
+					tc := TeamContext{TeamID: key.TeamID, KeyID: key.ID, UserID: key.UserID, KeyType: key.KeyType, Role: key.Role, Display: display}
 					if pt != nil && tc.TeamID != "" {
 						actorID := key.ID
 						pt.Touch(tc.TeamID, actorID, display)
