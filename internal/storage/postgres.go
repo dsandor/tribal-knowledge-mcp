@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -91,6 +92,36 @@ func (s *PostgresStore) migrate() error {
 		WITH (lists = 100)
 	`)
 
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS entry_chunks (
+			id             BIGSERIAL PRIMARY KEY,
+			entry_id       TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			chunk_index    INT NOT NULL,
+			content        TEXT NOT NULL,
+			token_estimate INT NOT NULL DEFAULT 0,
+			UNIQUE(entry_id, chunk_index)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create entry_chunks table: %w", err)
+	}
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_entry_chunks_entry ON entry_chunks(entry_id)`)
+
+	_, err = s.db.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS chunk_embeddings (
+			chunk_id  BIGINT PRIMARY KEY REFERENCES entry_chunks(id) ON DELETE CASCADE,
+			embedding vector(%d) NOT NULL
+		)
+	`, s.embeddingDim))
+	if err != nil {
+		return fmt.Errorf("create chunk_embeddings table: %w", err)
+	}
+	_, _ = s.db.Exec(`
+		CREATE INDEX IF NOT EXISTS chunk_embeddings_cosine_idx
+		ON chunk_embeddings USING ivfflat (embedding vector_cosine_ops)
+		WITH (lists = 100)
+	`)
+
 	ctx := context.Background()
 	if err := s.migrateAnalysis(ctx); err != nil {
 		return fmt.Errorf("migrate analysis: %w", err)
@@ -110,13 +141,27 @@ func (s *PostgresStore) migrate() error {
 	if err := s.migrateSearch(context.Background()); err != nil {
 		return fmt.Errorf("migrate search: %w", err)
 	}
+	if err := s.backfillChunks(context.Background()); err != nil {
+		return fmt.Errorf("backfill chunks: %w", err)
+	}
 
 	return nil
 }
 
+// StoreEntry creates a new entry with a single embedding (legacy single-chunk
+// path). It delegates to StoreEntryChunked.
 func (s *PostgresStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, embedding []float32) (string, error) {
-	if embedding != nil && len(embedding) != s.embeddingDim {
-		return "", fmt.Errorf("embedding dim mismatch: got %d, want %d", len(embedding), s.embeddingDim)
+	return s.StoreEntryChunked(ctx, entry, []EntryChunk{{Index: 0, Content: entry.Content, Embedding: embedding}})
+}
+
+// StoreEntryChunked creates a new entry represented by one or more chunks.
+// chunks[0] is the representative chunk: its vector is also written to the
+// per-entry embeddings table so pipeline queries keep working.
+func (s *PostgresStore) StoreEntryChunked(ctx context.Context, entry KnowledgeEntry, chunks []EntryChunk) (string, error) {
+	for _, c := range chunks {
+		if c.Embedding != nil && len(c.Embedding) != s.embeddingDim {
+			return "", fmt.Errorf("embedding dim mismatch: got %d, want %d", len(c.Embedding), s.embeddingDim)
+		}
 	}
 
 	entry.ID = uuid.NewString()
@@ -151,21 +196,123 @@ func (s *PostgresStore) StoreEntry(ctx context.Context, entry KnowledgeEntry, em
 		return "", fmt.Errorf("insert entry: %w", err)
 	}
 
-	if embedding != nil {
-		v := pgvector.NewVector(embedding)
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO embeddings (entry_id, embedding) VALUES ($1, $2)`,
-			entry.ID, v,
-		)
-		if err != nil {
+	// Representative chunk: write per-entry vector for the pipeline.
+	if len(chunks) > 0 && chunks[0].Embedding != nil {
+		v := pgvector.NewVector(chunks[0].Embedding)
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO embeddings (entry_id, embedding) VALUES ($1, $2)`, entry.ID, v); err != nil {
 			return "", fmt.Errorf("insert embedding: %w", err)
 		}
+	}
+
+	if err := insertChunksTxPG(ctx, tx, entry.ID, chunks); err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return entry.ID, nil
+}
+
+// insertChunksTxPG inserts each chunk into entry_chunks and, for chunks with a
+// non-nil embedding, into chunk_embeddings keyed by the new entry_chunks id.
+func insertChunksTxPG(ctx context.Context, tx *sql.Tx, entryID string, chunks []EntryChunk) error {
+	for _, c := range chunks {
+		var chunkID int64
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO entry_chunks (entry_id, chunk_index, content, token_estimate)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id
+		`, entryID, c.Index, c.Content, c.TokenEstimate).Scan(&chunkID)
+		if err != nil {
+			return fmt.Errorf("insert entry_chunks: %w", err)
+		}
+		if c.Embedding == nil {
+			continue
+		}
+		v := pgvector.NewVector(c.Embedding)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES ($1, $2)`, chunkID, v); err != nil {
+			return fmt.Errorf("insert chunk_embeddings: %w", err)
+		}
+	}
+	return nil
+}
+
+// ReplaceEntryChunks atomically swaps all chunks (and their vectors) for an
+// existing entry, and refreshes the representative per-entry vector.
+func (s *PostgresStore) ReplaceEntryChunks(ctx context.Context, entryID string, chunks []EntryChunk) error {
+	for _, c := range chunks {
+		if c.Embedding != nil && len(c.Embedding) != s.embeddingDim {
+			return fmt.Errorf("embedding dim mismatch: got %d, want %d", len(c.Embedding), s.embeddingDim)
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entries WHERE id = $1)`, entryID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check entry exists: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("entry %q: %w", entryID, ErrNotFound)
+	}
+
+	// chunk_embeddings cascades when entry_chunks rows are deleted.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entry_chunks WHERE entry_id = $1`, entryID); err != nil {
+		return fmt.Errorf("delete entry_chunks: %w", err)
+	}
+
+	if err := insertChunksTxPG(ctx, tx, entryID, chunks); err != nil {
+		return err
+	}
+
+	// Refresh the representative per-entry vector.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM embeddings WHERE entry_id = $1`, entryID); err != nil {
+		return fmt.Errorf("delete embeddings: %w", err)
+	}
+	if len(chunks) > 0 && chunks[0].Embedding != nil {
+		v := pgvector.NewVector(chunks[0].Embedding)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO embeddings (entry_id, embedding) VALUES ($1, $2)`, entryID, v); err != nil {
+			return fmt.Errorf("insert embedding: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// backfillChunks creates a chunk-0 row for every entry that has none, copying
+// the per-entry embedding (if present) into chunk_embeddings. Idempotent.
+func (s *PostgresStore) backfillChunks(ctx context.Context) error {
+	// Insert missing chunk-0 rows.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO entry_chunks (entry_id, chunk_index, content, token_estimate)
+		SELECT e.id, 0, e.content, 0
+		FROM entries e
+		WHERE NOT EXISTS (SELECT 1 FROM entry_chunks ec WHERE ec.entry_id = e.id)
+	`); err != nil {
+		return fmt.Errorf("backfill entry_chunks: %w", err)
+	}
+
+	// Copy per-entry embeddings into chunk_embeddings for chunk-0 rows that lack one.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO chunk_embeddings (chunk_id, embedding)
+		SELECT ec.id, em.embedding
+		FROM entry_chunks ec
+		JOIN embeddings em ON em.entry_id = ec.entry_id
+		WHERE ec.chunk_index = 0
+		  AND NOT EXISTS (SELECT 1 FROM chunk_embeddings ce WHERE ce.chunk_id = ec.id)
+	`); err != nil {
+		return fmt.Errorf("backfill chunk_embeddings: %w", err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error) {
@@ -272,12 +419,19 @@ func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, 
 
 	v := pgvector.NewVector(embedding)
 
+	// Query the chunk vectors and collapse to one best (minimum) distance per
+	// entry. Fetch extra chunk hits to give the dedup room.
+	k := topK * 4
+	if k < topK {
+		k = topK
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT entry_id, embedding <=> $1 AS distance
-		FROM embeddings
+		SELECT ec.entry_id, ce.embedding <=> $1 AS distance
+		FROM chunk_embeddings ce
+		JOIN entry_chunks ec ON ec.id = ce.chunk_id
 		ORDER BY distance
 		LIMIT $2
-	`, v, topK)
+	`, v, k)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
@@ -287,19 +441,37 @@ func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, 
 		entryID  string
 		distance float64
 	}
-	var vecResults []vecResult
+	bestDist := make(map[string]float64)
+	var order []string
 	for rows.Next() {
-		var r vecResult
-		if err := rows.Scan(&r.entryID, &r.distance); err != nil {
+		var entryID string
+		var distance float64
+		if err := rows.Scan(&entryID, &distance); err != nil {
 			return nil, fmt.Errorf("scan vec result: %w", err)
 		}
-		vecResults = append(vecResults, r)
+		if d, ok := bestDist[entryID]; !ok {
+			bestDist[entryID] = distance
+			order = append(order, entryID)
+		} else if distance < d {
+			bestDist[entryID] = distance
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(vecResults) == 0 {
+	if len(order) == 0 {
 		return []SearchResult{}, nil
+	}
+
+	sort.SliceStable(order, func(i, j int) bool {
+		return bestDist[order[i]] < bestDist[order[j]]
+	})
+	if len(order) > topK {
+		order = order[:topK]
+	}
+	vecResults := make([]vecResult, len(order))
+	for i, id := range order {
+		vecResults[i] = vecResult{entryID: id, distance: bestDist[id]}
 	}
 
 	// Build an IN clause with $N placeholders preserving order.
