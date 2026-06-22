@@ -42,6 +42,14 @@ func validUTF8(s string) bool {
 // effective token budget. It never drops content and never splits inside a
 // UTF-8 rune.
 func Chunk(content string, cfg ChunkConfig) []ContentChunk {
+	// No chunking when unconfigured: an unset/invalid MaxTokens means "do not
+	// chunk" (matching the tool-filter's maxTokens<=0 guard). Returning a single
+	// chunk here avoids pathological over-chunking (one chunk per few runes, each
+	// triggering its own embedding call).
+	if cfg.MaxTokens <= 0 {
+		return []ContentChunk{{Index: 0, Content: content, TokenEstimate: CountTokens(content)}}
+	}
+
 	budget := int(float64(cfg.MaxTokens) * safetyFraction)
 	if budget < 1 {
 		budget = 1

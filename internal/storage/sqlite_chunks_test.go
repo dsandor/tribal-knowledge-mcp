@@ -138,6 +138,65 @@ func TestSearchSimilar_DedupesToEntry(t *testing.T) {
 	}
 }
 
+// TestSearchSimilar_ReturnsTopKDistinctEntries is a regression test for the bug
+// where the chunk-fetch pool (topK*const) could be entirely consumed by a single
+// entry that owns many of the closest chunks, so after deduping to one result
+// per entry the search returned far fewer than topK distinct entries even though
+// more matching entries existed.
+//
+// Setup: one "hog" entry owns many chunks that are all the exact closest match
+// to the query, plus several other entries with a single chunk each slightly
+// farther away. A correct SearchSimilar(query, 5) must still surface 5 distinct
+// entries.
+func TestSearchSimilar_ReturnsTopKDistinctEntries(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestChunkStore(t)
+
+	query := []float32{1, 0, 0, 0}
+
+	// Hog entry: 18 chunks all exactly at the query (distance 0). With the old
+	// fixed pool of topK*4 == 20, these alone (plus a couple of others) crowd out
+	// the remaining distinct entries.
+	var hogChunks []storage.EntryChunk
+	for i := 0; i < 18; i++ {
+		hogChunks = append(hogChunks, storage.EntryChunk{
+			Index:     i,
+			Content:   "hog chunk",
+			Embedding: []float32{1, 0, 0, 0},
+		})
+	}
+	if _, err := store.StoreEntryChunked(ctx, chunkSampleEntry(), hogChunks); err != nil {
+		t.Fatalf("store hog entry: %v", err)
+	}
+
+	// Six other entries, each a single chunk slightly farther from the query
+	// along the 2nd dimension (distinct, increasing distances, all > 0).
+	otherIDs := make(map[string]bool)
+	for i := 1; i <= 6; i++ {
+		off := float32(i) * 0.05
+		id, err := store.StoreEntryChunked(ctx, chunkSampleEntry(), []storage.EntryChunk{
+			{Index: 0, Content: "other chunk", Embedding: []float32{1, off, 0, 0}},
+		})
+		if err != nil {
+			t.Fatalf("store other entry %d: %v", i, err)
+		}
+		otherIDs[id] = true
+	}
+
+	results, err := store.SearchSimilar(ctx, query, 5)
+	if err != nil {
+		t.Fatalf("SearchSimilar: %v", err)
+	}
+
+	distinct := make(map[string]bool)
+	for _, r := range results {
+		distinct[r.Entry.ID] = true
+	}
+	if len(distinct) != 5 {
+		t.Fatalf("SearchSimilar returned %d distinct entries, want 5 (results=%d)", len(distinct), len(results))
+	}
+}
+
 func TestStoreEntry_BackwardCompatSingleChunk(t *testing.T) {
 	ctx := context.Background()
 	store, db := newTestChunkStore(t)

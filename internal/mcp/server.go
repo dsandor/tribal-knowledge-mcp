@@ -37,6 +37,9 @@ func knowledgeStoreDescription(maxTokens int) string {
 // chunk-size limit. All other tools are returned unchanged.
 func knowledgeStoreToolFilter(src *aiconfig.Sources) server.ToolFilterFunc {
 	return func(ctx context.Context, tools []mcplib.Tool) []mcplib.Tool {
+		if src == nil {
+			return tools
+		}
 		teamID, _ := resolveActorTeam(ctx)
 		maxTokens := src.ChunkConfig(ctx, teamID).MaxTokens
 		if maxTokens <= 0 {

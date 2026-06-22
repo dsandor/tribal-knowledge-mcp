@@ -19,6 +19,26 @@ func TestChunk_SmallContentSingleChunk(t *testing.T) {
 	}
 }
 
+func TestChunk_ZeroConfigSingleChunk(t *testing.T) {
+	// A zero/unconfigured ChunkConfig means "do not chunk": large content must
+	// come back as a single chunk equal to the input, not exploded into many
+	// tiny chunks (which would trigger one embedding call each).
+	longText := strings.Repeat("paragraph one.\n\nparagraph two.\n\n", 500)
+	got := Chunk(longText, ChunkConfig{})
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 chunk for zero config, got %d", len(got))
+	}
+	if got[0].Content != longText {
+		t.Fatalf("content altered: chunk content does not equal input")
+	}
+	if got[0].Index != 0 {
+		t.Fatalf("want index 0, got %d", got[0].Index)
+	}
+	if got[0].TokenEstimate != CountTokens(longText) {
+		t.Fatalf("want token estimate %d, got %d", CountTokens(longText), got[0].TokenEstimate)
+	}
+}
+
 func TestChunk_LargeContentSplits(t *testing.T) {
 	body := strings.Repeat("paragraph one.\n\nparagraph two.\n\n", 500)
 	cfg := ChunkConfig{MaxTokens: 64, OverlapTokens: 8, MaxChunks: 1000}

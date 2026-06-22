@@ -419,45 +419,71 @@ func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, 
 
 	v := pgvector.NewVector(embedding)
 
-	// Query the chunk vectors and collapse to one best (minimum) distance per
-	// entry. Fetch extra chunk hits to give the dedup room.
-	k := topK * 4
-	if k < topK {
-		k = topK
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT ec.entry_id, ce.embedding <=> $1 AS distance
-		FROM chunk_embeddings ce
-		JOIN entry_chunks ec ON ec.id = ce.chunk_id
-		ORDER BY distance
-		LIMIT $2
-	`, v, k)
-	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
-	}
-	defer rows.Close()
-
 	type vecResult struct {
 		entryID  string
 		distance float64
 	}
+
+	// Query the chunk vectors and collapse to one best (minimum) distance per
+	// entry. A fixed multiple of topK chunk hits can collapse to far fewer than
+	// topK distinct entries when a handful of entries each own many of the
+	// closest chunks. Use an expanding retrieval: fetch a pool, dedup to entries,
+	// and grow the pool while we have fewer than topK distinct entries and the
+	// chunk table is not yet exhausted.
+	const maxK = 4096
+	k := topK * 8
+	if k < topK {
+		k = topK
+	}
+
 	bestDist := make(map[string]float64)
 	var order []string
-	for rows.Next() {
-		var entryID string
-		var distance float64
-		if err := rows.Scan(&entryID, &distance); err != nil {
-			return nil, fmt.Errorf("scan vec result: %w", err)
+	for {
+		bestDist = make(map[string]float64)
+		order = order[:0]
+
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT ec.entry_id, ce.embedding <=> $1 AS distance
+			FROM chunk_embeddings ce
+			JOIN entry_chunks ec ON ec.id = ce.chunk_id
+			ORDER BY distance
+			LIMIT $2
+		`, v, k)
+		if err != nil {
+			return nil, fmt.Errorf("vector search: %w", err)
 		}
-		if d, ok := bestDist[entryID]; !ok {
-			bestDist[entryID] = distance
-			order = append(order, entryID)
-		} else if distance < d {
-			bestDist[entryID] = distance
+
+		rowCount := 0
+		for rows.Next() {
+			var entryID string
+			var distance float64
+			if err := rows.Scan(&entryID, &distance); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan vec result: %w", err)
+			}
+			rowCount++
+			if d, ok := bestDist[entryID]; !ok {
+				bestDist[entryID] = distance
+				order = append(order, entryID)
+			} else if distance < d {
+				bestDist[entryID] = distance
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+
+		// Stop expanding once we have enough distinct entries, the chunk table is
+		// exhausted (returned fewer rows than requested), or we hit the cap.
+		if len(order) >= topK || rowCount < k || k >= maxK {
+			break
+		}
+		k *= 4
+		if k > maxK {
+			k = maxK
+		}
 	}
 	if len(order) == 0 {
 		return []SearchResult{}, nil

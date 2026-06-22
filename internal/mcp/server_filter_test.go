@@ -54,6 +54,26 @@ func TestKnowledgeStoreDescription(t *testing.T) {
 	}
 }
 
+func TestKnowledgeStoreToolFilter_NilSourcesReturnsToolsUnchanged(t *testing.T) {
+	filter := knowledgeStoreToolFilter(nil)
+
+	in := []mcplib.Tool{
+		{Name: "knowledge_store", Description: knowledgeStoreBaseDescription},
+		{Name: "knowledge_get", Description: "unchanged"},
+	}
+
+	// Must not panic and must return the tools unchanged.
+	out := filter(context.Background(), in)
+	if len(out) != len(in) {
+		t.Fatalf("nil-src filter changed tool count: got %d want %d", len(out), len(in))
+	}
+	for i := range in {
+		if out[i].Name != in[i].Name || out[i].Description != in[i].Description {
+			t.Errorf("nil-src filter modified tool %d: %+v", i, out[i])
+		}
+	}
+}
+
 func TestKnowledgeStoreToolFilter(t *testing.T) {
 	const maxTokens = 4096
 	filter := knowledgeStoreToolFilter(filterTestSources(maxTokens))
