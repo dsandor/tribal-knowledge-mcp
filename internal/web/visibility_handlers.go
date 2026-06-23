@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/dsandor/memory/internal/auth"
@@ -21,9 +23,11 @@ var validVisibilityRuleTypes = map[string]bool{
 // visibilityRuleResponse is the JSON shape returned to the SPA for a single
 // per-user visibility rule.
 type visibilityRuleResponse struct {
-	RuleType  string `json:"rule_type"`
-	Value     string `json:"value"`
-	CreatedAt string `json:"created_at"`
+	RuleType    string `json:"rule_type"`
+	Value       string `json:"value"`
+	CreatedAt   string `json:"created_at"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 func toVisibilityRuleResponse(r storage.VisibilityRule) visibilityRuleResponse {
@@ -52,7 +56,26 @@ func (s *Server) handleListVisibility(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]visibilityRuleResponse, 0, len(rules))
 	for _, rule := range rules {
-		out = append(out, toVisibilityRuleResponse(rule))
+		resp := toVisibilityRuleResponse(rule)
+		// For hidden individual items, enrich the row with the entry's title
+		// and description so the caller sees what they hid (not a raw UUID).
+		// The caller is viewing their own hidden list, so team-access
+		// filtering is intentionally not applied here.
+		if rule.RuleType == "item" {
+			entry, err := s.store.GetEntry(r.Context(), rule.Value)
+			switch {
+			case errors.Is(err, storage.ErrNotFound) || (err == nil && entry == nil):
+				resp.Title = "(entry not found)"
+			case err != nil:
+				// Don't fail the whole request for one bad lookup; leave the
+				// title/description empty and move on.
+				slog.Warn("visibility: lookup hidden entry", "id", rule.Value, "err", err)
+			default:
+				resp.Title = entry.Title
+				resp.Description = entry.Description
+			}
+		}
+		out = append(out, resp)
 	}
 	writeJSON(w, out)
 }

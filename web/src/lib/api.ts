@@ -733,6 +733,10 @@ export interface VisibilityRule {
   rule_type: VisibilityRuleType
   value: string
   created_at: string
+  // Populated for "item" rules: the hidden entry's title/summary so the UI can
+  // show what was hidden instead of a raw UUID.
+  title?: string
+  description?: string
 }
 
 export async function listVisibility(): Promise<VisibilityRule[]> {

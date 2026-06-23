@@ -145,26 +145,45 @@ export default function MyVisibility() {
                   <Typography color="text.secondary" variant="body2">{group.empty}</Typography>
                 ) : (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    {items.map((r) => (
-                      <Paper
-                        key={`${r.rule_type}:${r.value}`}
-                        sx={{
-                          p: 1.5,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 2,
-                          border: '1px solid',
-                          borderColor: 'divider',
-                        }}
-                      >
-                        <Typography sx={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }} variant="body2">
-                          {r.value}
-                        </Typography>
-                        <Button size="small" color="error" onClick={() => handleRemove(r)}>
-                          Remove
-                        </Button>
-                      </Paper>
-                    ))}
+                    {items.map((r) => {
+                      const isItem = r.rule_type === 'item'
+                      return (
+                        <Paper
+                          key={`${r.rule_type}:${r.value}`}
+                          sx={{
+                            p: 1.5,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            border: '1px solid',
+                            borderColor: 'divider',
+                          }}
+                        >
+                          {isItem ? (
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>
+                                {r.title || r.value}
+                              </Typography>
+                              {r.description && (
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-word' }}>
+                                  {r.description}
+                                </Typography>
+                              )}
+                              <Typography variant="caption" color="text.disabled" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                                {r.value}
+                              </Typography>
+                            </Box>
+                          ) : (
+                            <Typography sx={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }} variant="body2">
+                              {r.value}
+                            </Typography>
+                          )}
+                          <Button size="small" color="error" onClick={() => handleRemove(r)}>
+                            {isItem ? 'Unhide' : 'Remove'}
+                          </Button>
+                        </Paper>
+                      )
+                    })}
                   </Box>
                 )}
               </Box>

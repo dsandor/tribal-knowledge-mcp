@@ -131,6 +131,74 @@ func TestVisibilityHandlers_AddListDelete(t *testing.T) {
 	}
 }
 
+// TestVisibilityHandlers_ItemRuleEnrichedWithTitle ensures that hiding an
+// existing entry (an "item" rule) results in the GET /api/visibility response
+// carrying the entry's Title (and Description) rather than just the raw UUID.
+func TestVisibilityHandlers_ItemRuleEnrichedWithTitle(t *testing.T) {
+	store := &visStore{mockStore: mockStore{
+		apiKeyUserID: "user-a",
+		entries: []storage.KnowledgeEntry{
+			{ID: "entry-123", Title: "Q3 Earnings Playbook", Description: "How to prompt for earnings summaries"},
+		},
+	}}
+	srv := newVisServer(t, store)
+
+	// Hide the existing entry by id.
+	req := authRequest("POST", "/api/visibility", `{"rule_type":"item","value":"entry-123"}`)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// GET returns the rule enriched with the entry's title/description.
+	req = authRequest("GET", "/api/visibility", "")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	rules := decodeVisRules(t, w)
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %v", rules)
+	}
+	if rules[0]["rule_type"] != "item" || rules[0]["value"] != "entry-123" {
+		t.Fatalf("unexpected rule: %v", rules[0])
+	}
+	if rules[0]["title"] != "Q3 Earnings Playbook" {
+		t.Fatalf("expected title to be populated, got %v", rules[0]["title"])
+	}
+	if rules[0]["description"] != "How to prompt for earnings summaries" {
+		t.Fatalf("expected description to be populated, got %v", rules[0]["description"])
+	}
+}
+
+// TestVisibilityHandlers_ItemRuleMissingEntry ensures hiding an item whose
+// entry no longer exists surfaces a "(entry not found)" placeholder title
+// rather than failing the request.
+func TestVisibilityHandlers_ItemRuleMissingEntry(t *testing.T) {
+	store := &visStore{mockStore: mockStore{apiKeyUserID: "user-a"}}
+	srv := newVisServer(t, store)
+
+	req := authRequest("POST", "/api/visibility", `{"rule_type":"item","value":"gone-999"}`)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = authRequest("GET", "/api/visibility", "")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	rules := decodeVisRules(t, w)
+	if len(rules) != 1 || rules[0]["title"] != "(entry not found)" {
+		t.Fatalf("expected (entry not found) title, got %v", rules)
+	}
+}
+
 // TestVisibilityHandlers_RejectsBadRuleType ensures an invalid rule_type is 400.
 func TestVisibilityHandlers_RejectsBadRuleType(t *testing.T) {
 	store := &visStore{mockStore: mockStore{apiKeyUserID: "user-a"}}
