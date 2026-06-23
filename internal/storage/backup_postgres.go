@@ -119,7 +119,13 @@ func (s *PostgresStore) LoadEmbeddings(ctx context.Context, items []EmbeddingIte
 			return fmt.Errorf("insert embedding %s: %w", it.EntryID, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Rebuild chunk rows (entry_chunks + chunk_embeddings) from restored entries
+	// and per-entry embeddings so chunk-based similarity search works after
+	// restore. Idempotent: only entries without chunks are touched.
+	return s.backfillChunks(ctx)
 }
 
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {

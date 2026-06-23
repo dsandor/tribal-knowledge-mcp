@@ -49,6 +49,16 @@ type SearchResult struct {
 	Score float64
 }
 
+// EntryChunk is one embedded slice of a knowledge entry's content.
+// Index 0 is the representative chunk (used for pipeline clustering and the
+// legacy per-entry vector). An entry that fits in one chunk has exactly one.
+type EntryChunk struct {
+	Index         int
+	Content       string
+	TokenEstimate int
+	Embedding     []float32 // len must equal the store's embeddingDim, or nil
+}
+
 type ListFilter struct {
 	Domain string
 	Type   KnowledgeType
@@ -136,6 +146,32 @@ type ActivityEvent struct {
 	CreatedAt time.Time
 }
 
+// KnowledgeShare is a single-use, cross-team share token for a knowledge entry.
+// A user mints one of these for an entry; another user (any team) may import a
+// copy exactly once. After an import (UsedAt set) or a revoke (RevokedAt set)
+// the token is dead.
+type KnowledgeShare struct {
+	ID              string // random unguessable token (the share id)
+	EntryID         string
+	SourceTeamID    string
+	CreatedBy       string // user id
+	UsedAt          *time.Time
+	UsedBy          string // importing user id
+	ImportedEntryID string
+	RevokedAt       *time.Time
+	CreatedAt       time.Time
+}
+
+// VisibilityRule is a per-user suppression rule: knowledge matching the rule
+// is hidden from that user's results. RuleType scopes what Value matches.
+type VisibilityRule struct {
+	ID        string
+	UserID    string
+	RuleType  string // "item" | "author" | "tag" | "domain"
+	Value     string
+	CreatedAt time.Time
+}
+
 // AnalysisStore extends Store with methods needed by the analysis pipeline.
 type AnalysisStore interface {
 	Store
@@ -172,6 +208,13 @@ type Store interface {
 	// StoreEntry always creates a new entry, assigning a fresh UUID as ID.
 	// The ID field on the passed entry is ignored. Returns the assigned ID.
 	StoreEntry(ctx context.Context, entry KnowledgeEntry, embedding []float32) (string, error)
+	// StoreEntryChunked creates a new entry whose content is represented by one
+	// or more embedding vectors (chunks). chunks[0] is the representative chunk.
+	// Assigns a fresh UUID; entry.ID is ignored. Returns the new ID.
+	StoreEntryChunked(ctx context.Context, entry KnowledgeEntry, chunks []EntryChunk) (string, error)
+	// ReplaceEntryChunks atomically replaces all chunks (and vectors) for an
+	// existing entry. Used when content is edited. Returns ErrNotFound if absent.
+	ReplaceEntryChunks(ctx context.Context, entryID string, chunks []EntryChunk) error
 	GetEntry(ctx context.Context, id string) (*KnowledgeEntry, error)
 	ListEntries(ctx context.Context, filter ListFilter) ([]KnowledgeEntry, error)
 	DeleteEntry(ctx context.Context, id string) error
@@ -221,6 +264,19 @@ type Store interface {
 	// GetEntryByContentHash returns the first entry whose content_hash matches SHA256(title+content).
 	// Returns nil, nil if no match.
 	GetEntryByContentHash(ctx context.Context, hash string) (*KnowledgeEntry, error)
+
+	// Per-user visibility (suppression) rules.
+	AddVisibilityRule(ctx context.Context, userID, ruleType, value string) (VisibilityRule, error)
+	DeleteVisibilityRule(ctx context.Context, userID, ruleType, value string) error
+	ListVisibilityRules(ctx context.Context, userID string) ([]VisibilityRule, error)
+
+	// Cross-team knowledge sharing (single-use tokens).
+	CreateShare(ctx context.Context, entryID, sourceTeamID, createdBy string) (KnowledgeShare, error)
+	GetShare(ctx context.Context, id string) (*KnowledgeShare, error) // ErrNotFound if absent
+	// MarkShareUsed sets used_at/used_by/imported_entry_id; returns an error if the
+	// share is already used or revoked (callers rely on this for single-use safety).
+	MarkShareUsed(ctx context.Context, id, usedBy, importedEntryID string) error
+	RevokeShare(ctx context.Context, id string) error
 }
 
 // sha256Hex returns the lowercase hex-encoded SHA-256 digest of s.

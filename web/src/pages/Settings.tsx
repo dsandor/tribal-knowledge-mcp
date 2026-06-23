@@ -41,6 +41,9 @@ interface TeamSettings {
   ollama_model?: string;
   llm_provider?: string;
   ollama_llm_model?: string;
+  embedding_max_tokens?: number;
+  chunk_overlap_tokens?: number;
+  max_chunks?: number;
   ai_touchpoints?: Record<string, AITouchpoint>;
   ai?: AISettings;
 }
@@ -488,6 +491,37 @@ export default function Settings() {
               </>
             )}
           </Box>
+
+          {/* Embedding / chunking config */}
+          <TextField
+            label="Embedding Max Tokens"
+            type="number"
+            fullWidth
+            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            value={settings.embedding_max_tokens ?? 0}
+            onChange={e => setSettings(s => ({ ...s, embedding_max_tokens: parseInt(e.target.value) || 0 }))}
+            helperText="Max tokens per embedding vector. Larger items are auto-split into chunks. 0 = server default (8192)."
+          />
+
+          <TextField
+            label="Chunk Overlap Tokens"
+            type="number"
+            fullWidth
+            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            value={settings.chunk_overlap_tokens ?? 0}
+            onChange={e => setSettings(s => ({ ...s, chunk_overlap_tokens: parseInt(e.target.value) || 0 }))}
+            helperText="Tokens of overlap between adjacent chunks. 0 = server default (128)."
+          />
+
+          <TextField
+            label="Max Chunks"
+            type="number"
+            fullWidth
+            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            value={settings.max_chunks ?? 0}
+            onChange={e => setSettings(s => ({ ...s, max_chunks: parseInt(e.target.value) || 0 }))}
+            helperText="Safety cap on chunks per item. 0 = unlimited/server default (64)."
+          />
 
           {/* Ollama LLM Model */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>

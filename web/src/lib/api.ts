@@ -161,6 +161,29 @@ async function del(path: string): Promise<void> {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
 }
 
+export interface ShareCreated {
+  share_id: string
+  url: string
+}
+
+export interface SharePreview {
+  id: string
+  title: string
+  content: string
+  type: string
+  domain: string
+  author: string
+  tags: string[]
+  source_team_id: string
+  importable: boolean
+  already_yours: boolean
+}
+
+export interface ShareImportResult {
+  status: 'pending' | 'already_yours'
+  imported_entry_id?: string
+}
+
 export const api = {
   stats: (): Promise<Stats> => get('/stats'),
 
@@ -231,6 +254,31 @@ export const api = {
         throw new Error(err.message || err.error || 'rename failed')
       }
       return r.json()
+    },
+  },
+
+  share: {
+    // Mint a single-use cross-team share token for an entry.
+    create: async (entryId: string): Promise<ShareCreated> => {
+      const r = await apiFetch(`${BASE}/knowledge/${entryId}/share`, { method: 'POST' })
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.message || body?.error || `share failed: ${r.status}`)
+      return body
+    },
+    // Load the recipient-facing preview for a share token.
+    get: async (token: string): Promise<SharePreview> => {
+      const r = await apiFetch(`${BASE}/share/${token}`)
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.message || body?.error || `share not found`)
+      return body
+    },
+    // Import the shared entry into the caller's team. Returns status even on 409
+    // (used/revoked) by surfacing the server's error message.
+    import: async (token: string): Promise<ShareImportResult> => {
+      const r = await apiFetch(`${BASE}/share/${token}/import`, { method: 'POST' })
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.message || body?.error || `import failed: ${r.status}`)
+      return body
     },
   },
 
@@ -676,4 +724,41 @@ export async function fetchActivity(limit = 20, offset = 0): Promise<ActivityEve
   const r = await apiFetch(`/api/activity?limit=${limit}&offset=${offset}`);
   if (!r.ok) throw new Error('fetch activity failed');
   return r.json();
+}
+
+// --- Per-user visibility rules ---
+export type VisibilityRuleType = 'item' | 'author' | 'tag' | 'domain'
+
+export interface VisibilityRule {
+  rule_type: VisibilityRuleType
+  value: string
+  created_at: string
+}
+
+export async function listVisibility(): Promise<VisibilityRule[]> {
+  const r = await apiFetch('/api/visibility');
+  if (!r.ok) throw new Error('list visibility failed');
+  return r.json();
+}
+
+export async function addVisibilityRule(rule_type: VisibilityRuleType, value: string): Promise<VisibilityRule> {
+  const r = await apiFetch('/api/visibility', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_type, value }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'add visibility rule failed');
+  }
+  return r.json();
+}
+
+export async function deleteVisibilityRule(rule_type: VisibilityRuleType, value: string): Promise<void> {
+  const r = await apiFetch('/api/visibility', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_type, value }),
+  });
+  if (!r.ok) throw new Error('delete visibility rule failed');
 }

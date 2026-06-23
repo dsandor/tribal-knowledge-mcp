@@ -20,6 +20,42 @@ AFTER completing a non-trivial task, call knowledge_store to capture reusable le
 
 When in doubt, consult the server — calls are cheap and idempotent.`
 
+// knowledgeStoreBaseDescription is the statically-registered description for the
+// knowledge_store tool. The tool filter augments it per-request with the team's
+// effective content-size limit (see knowledgeStoreDescription).
+const knowledgeStoreBaseDescription = "Call at the END of any non-trivial task to capture a reusable learning (prompt template, pattern, workflow, domain fact, or anti-pattern). Prefer storing over letting knowledge evaporate. Include concrete content and a clear description of when to use this entry. Skipping this means the team loses the insight. Inline #hashtags in the title or content are automatically extracted as tags."
+
+// knowledgeStoreDescription builds the knowledge_store tool description,
+// telegraphing the effective per-team content-size behavior so client LLMs do
+// not pre-trim or split content themselves.
+func knowledgeStoreDescription(maxTokens int) string {
+	return fmt.Sprintf("%s Content of any length is accepted — items larger than ~%d tokens are automatically split into linked chunks internally and remain fully searchable as a single entry, so do not pre-trim or split content yourself.", knowledgeStoreBaseDescription, maxTokens)
+}
+
+// knowledgeStoreToolFilter returns a mcp-go ToolFilterFunc that rewrites the
+// knowledge_store tool's description to reflect the requesting team's effective
+// chunk-size limit. All other tools are returned unchanged.
+func knowledgeStoreToolFilter(src *aiconfig.Sources) server.ToolFilterFunc {
+	return func(ctx context.Context, tools []mcplib.Tool) []mcplib.Tool {
+		if src == nil {
+			return tools
+		}
+		teamID, _ := resolveActorTeam(ctx)
+		maxTokens := src.ChunkConfig(ctx, teamID).MaxTokens
+		if maxTokens <= 0 {
+			return tools
+		}
+		out := make([]mcplib.Tool, len(tools))
+		for i, t := range tools {
+			if t.Name == "knowledge_store" {
+				t.Description = knowledgeStoreDescription(maxTokens)
+			}
+			out[i] = t
+		}
+		return out
+	}
+}
+
 func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventBus) *server.MCPServer {
 	var eventBus live.EventBus
 	if len(bus) > 0 {
@@ -33,11 +69,12 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 		server.WithPromptCapabilities(true),
 		server.WithResourceCapabilities(true, false),
 		server.WithInstructions(serverInstructions),
+		server.WithToolFilter(knowledgeStoreToolFilter(src)),
 	)
 
 	s.AddTool(
 		mcplib.NewTool("knowledge_store",
-			mcplib.WithDescription("Call at the END of any non-trivial task to capture a reusable learning (prompt template, pattern, workflow, domain fact, or anti-pattern). Prefer storing over letting knowledge evaporate. Include concrete content and a clear description of when to use this entry. Skipping this means the team loses the insight. Inline #hashtags in the title or content are automatically extracted as tags."),
+			mcplib.WithDescription(knowledgeStoreBaseDescription),
 			mcplib.WithString("title", mcplib.Required(), mcplib.Description("Short descriptive title")),
 			mcplib.WithString("content", mcplib.Required(), mcplib.Description("Full content of the knowledge entry")),
 			mcplib.WithString("type", mcplib.Required(), mcplib.Description("One of: prompt, pattern, workflow, domain_fact, anti_pattern")),

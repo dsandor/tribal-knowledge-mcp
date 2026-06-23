@@ -107,6 +107,68 @@ func TestRequireAuth_ValidSessionCookie(t *testing.T) {
 	}
 }
 
+func TestRequireAuth_UserScopedKey_SetsUserIDAndKeyType(t *testing.T) {
+	rawKey := "user-scoped-key"
+	store := &mockAuthStore{key: &storage.APIKey{
+		ID:      "k-user",
+		TeamID:  "team-u",
+		UserID:  "user-123",
+		KeyType: "user",
+		KeyHash: auth.HashSHA256(rawKey),
+		Role:    "member",
+	}}
+	mw := auth.RequireAuth(store)
+	var gotCtx auth.TeamContext
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCtx = auth.GetTeamContext(r.Context())
+		w.WriteHeader(200)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if gotCtx.UserID != "user-123" {
+		t.Errorf("UserID = %q, want user-123", gotCtx.UserID)
+	}
+	if gotCtx.KeyType != "user" {
+		t.Errorf("KeyType = %q, want user", gotCtx.KeyType)
+	}
+}
+
+func TestRequireAuth_TeamScopedKey_EmptyUserIDAndTeamKeyType(t *testing.T) {
+	rawKey := "team-scoped-key"
+	store := &mockAuthStore{key: &storage.APIKey{
+		ID:      "k-team",
+		TeamID:  "team-t",
+		UserID:  "",
+		KeyType: "team",
+		KeyHash: auth.HashSHA256(rawKey),
+		Role:    "member",
+	}}
+	mw := auth.RequireAuth(store)
+	var gotCtx auth.TeamContext
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCtx = auth.GetTeamContext(r.Context())
+		w.WriteHeader(200)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer "+rawKey)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if gotCtx.UserID != "" {
+		t.Errorf("UserID = %q, want empty", gotCtx.UserID)
+	}
+	if gotCtx.KeyType != "team" {
+		t.Errorf("KeyType = %q, want team", gotCtx.KeyType)
+	}
+}
+
 func TestRequireCurator_RejectsMember(t *testing.T) {
 	rawKey := "member-key"
 	store := &mockAuthStore{key: &storage.APIKey{

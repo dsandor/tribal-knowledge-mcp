@@ -8,6 +8,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Per-User Knowledge Visibility & Cross-Team Sharing**
+  - Per-user suppression: a user can hide an individual entry, mute an author, or mute a tag/domain so those entries stop influencing *their* searches, `enrich_context`, and lists — without affecting teammates. A user's own authored entries are never hidden by their rules
+  - Applies to user-scoped tokens (which now carry the caller's `user_id`) and web sessions; shared team tokens keep the full unfiltered team view
+  - New MCP tools `knowledge_hide` / `knowledge_unhide` / `knowledge_mute` / `knowledge_unmute` / `knowledge_visibility`, plus a "My Visibility" web page and Hide / Mute-author actions on the knowledge detail view
+  - Cross-team sharing: `knowledge_share` (and a Share action in the UI) mints a single-use link; a recipient on any team opens it and imports a **copy** into their team as a `pending` entry (their curator queue), re-chunked and re-embedded under their team's config with the original author preserved. MCP `knowledge_import` + web `/share/<token>` landing page. Same-team links are just deep links ("already yours, no import needed")
+- **Large Knowledge Items via Transparent Multi-Vector Chunking**
+  - Knowledge content of any size is accepted; items larger than the embedding model's context window are automatically split into multiple coherent chunks internally, each embedded as its own vector, so nothing is silently truncated/lost. The item remains a single logical entry (one ID, rating, and usage count)
+  - New `entry_chunks` + per-chunk vector tables (`vec_chunks` for SQLite, `chunk_embeddings` for Postgres); semantic search runs over chunks and dedupes to one best-scoring result per entry. Existing entries are backfilled to a single chunk on migration
+  - Per-team, env-defaulted configuration (Settings UI + env): `EMBEDDING_MAX_TOKENS` (default 8192), `EMBEDDING_CHUNK_OVERLAP` (default 128), `EMBEDDING_MAX_CHUNKS` (default 64); `0` on a team falls back to the env default
+  - The `knowledge_store` MCP tool description is rewritten per request to telegraph the requesting team's effective size limit, so clients stop pre-trimming or splitting content
+  - `knowledge_store` now reports `chunk_count` and `embedding_max_tokens` in its result
+  - Fix: editing a knowledge entry's content now re-chunks and re-embeds it (previously the stored vector went stale after an edit); backup restore also rebuilds chunk vectors
 - **Full-Database Backup & Restore with Cross-Engine Migration**
   - Logical full backup of every team and all data — knowledge entries + embeddings, clusters, pipeline runs, dataset snapshots, analysis cache, rules, agents, agent versions, teams, users, API keys, auth config, team settings, and usage/activity history (ephemeral login sessions excluded)
   - Engine-neutral archive format (`tar.gz` of a manifest + per-table JSONL; embeddings as float arrays) that round-trips SQLite ↔ PostgreSQL, enabling SQLite → Postgres (and reverse) migration

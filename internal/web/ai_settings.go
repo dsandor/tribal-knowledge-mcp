@@ -134,6 +134,10 @@ func buildSettingsResponse(settings *storage.TeamSettings, aiBlock map[string]an
 		"ollama_llm_model": settings.OllamaLLMModel,
 		// ai_touchpoints: plain map for UI hydration (no env layer).
 		"ai_touchpoints": touchpoints,
+		// Per-team embedding/chunking config. 0 means "unset → env default".
+		"embedding_max_tokens": settings.EmbeddingMaxTokens,
+		"chunk_overlap_tokens": settings.ChunkOverlapTokens,
+		"max_chunks":           settings.MaxChunks,
 	}
 	if aiBlock != nil {
 		m["ai"] = aiBlock

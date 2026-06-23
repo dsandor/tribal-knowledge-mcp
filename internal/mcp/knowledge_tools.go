@@ -9,6 +9,7 @@ import (
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
+	"github.com/dsandor/memory/internal/visibility"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -96,6 +97,9 @@ func HandleKnowledgeSearch(store storage.Store, src *aiconfig.Sources) server.To
 			}
 			results = filtered
 		}
+
+		// Per-user suppression (no-op for team tokens / stdio).
+		results = visibility.FilterResults(callerVisibility(ctx, store), results)
 
 		if len(results) > topK {
 			results = results[:topK]

@@ -2,10 +2,12 @@ package web
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,9 +18,11 @@ import (
 
 	agentpkg "github.com/dsandor/memory/internal/agent"
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/embedding"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	tagspkg "github.com/dsandor/memory/internal/tags"
+	"github.com/dsandor/memory/internal/visibility"
 )
 
 // publishLive publishes a live event to the hub if one is configured.
@@ -90,6 +94,28 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// callerVisibility builds the calling user's compiled suppression RuleSet.
+// It returns a zero (no-op) RuleSet — which hides nothing — when the caller is
+// not user-scoped (tc.UserID == "") or when the rules cannot be loaded. Owner
+// identities (id/email/name) are included so a user's own entries are never
+// hidden.
+func (s *Server) callerVisibility(ctx context.Context, tc auth.TeamContext) visibility.RuleSet {
+	if tc.UserID == "" {
+		return visibility.RuleSet{}
+	}
+	rules, err := s.store.ListVisibilityRules(ctx, tc.UserID)
+	if err != nil {
+		slog.Warn("visibility filter failing open: could not load rules",
+			"user_id", tc.UserID, "error", err)
+		return visibility.RuleSet{}
+	}
+	identities := []string{tc.UserID}
+	if u, err := s.store.GetUserByID(ctx, tc.UserID); err == nil && u != nil {
+		identities = append(identities, u.Email, u.Name)
+	}
+	return visibility.Compile(rules, identities...)
+}
+
 func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
 	q := r.URL.Query()
@@ -114,6 +140,8 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list entries: %v", err))
 		return
 	}
+	// Per-user suppression (no-op when the caller is not user-scoped).
+	entries = visibility.FilterEntries(s.callerVisibility(r.Context(), tc), entries)
 	if entries == nil {
 		entries = []storage.KnowledgeEntry{}
 	}
@@ -644,6 +672,7 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "invalid JSON body")
 		return
 	}
+	oldContent := existing.Content
 	if body.Title != "" {
 		existing.Title = body.Title
 	}
@@ -663,6 +692,51 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", fmt.Sprintf("update entry: %v", err))
 		return
 	}
+
+	// Re-embed only when the content actually changed. The entry row is already
+	// updated above; refreshing the stored vectors keeps similarity search in
+	// sync with the new content (otherwise edits leave a stale embedding behind).
+	if existing.Content != oldContent {
+		if s.aiSrc == nil {
+			slog.Info("knowledge update: re-embed skipped, AI sources not configured", "id", id, "team", existing.TeamID)
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+		teamID := existing.TeamID
+		embedder := s.aiSrc.Embedder(ctx, teamID)
+		if embedder == nil {
+			slog.Info("knowledge update: re-embed skipped, embedding not configured", "id", id, "team", teamID)
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+		cfg := s.aiSrc.ChunkConfig(ctx, teamID)
+		chunks := embedding.Chunk(existing.Content, cfg)
+		entryChunks := make([]storage.EntryChunk, 0, len(chunks))
+		for _, c := range chunks {
+			emb, err := embedder.Embed(ctx, c.Content)
+			if err != nil {
+				slog.Error("knowledge update: re-embed failed", "id", id, "team", teamID, "chunk", c.Index, "err", err)
+				writeError(w, 500, "internal_error", fmt.Sprintf("re-embed content: %v", err))
+				return
+			}
+			entryChunks = append(entryChunks, storage.EntryChunk{
+				Index:         c.Index,
+				Content:       c.Content,
+				TokenEstimate: c.TokenEstimate,
+				Embedding:     emb,
+			})
+		}
+		if err := s.store.ReplaceEntryChunks(ctx, id, entryChunks); err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				writeError(w, 404, "not_found", "entry not found")
+				return
+			}
+			slog.Error("knowledge update: replace chunks failed", "id", id, "team", teamID, "err", err)
+			writeError(w, 500, "internal_error", fmt.Sprintf("replace entry chunks: %v", err))
+			return
+		}
+	}
+
 	writeJSON(w, map[string]any{"ok": true})
 }
 

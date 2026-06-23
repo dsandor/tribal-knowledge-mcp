@@ -553,7 +553,8 @@ func (s *SQLiteStore) GetTeamSettings(ctx context.Context, teamID string) (*Team
 	row := s.db.QueryRowContext(ctx, `
 		SELECT team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
 		       anthropic_api_key, anthropic_model, ollama_url, ollama_model,
-		       llm_provider, ollama_llm_model, ai_touchpoints, updated_at
+		       llm_provider, ollama_llm_model, ai_touchpoints,
+		       embedding_max_tokens, chunk_overlap_tokens, max_chunks, updated_at
 		FROM team_settings WHERE team_id = ?
 	`, teamID)
 	var ts TeamSettings
@@ -561,7 +562,8 @@ func (s *SQLiteStore) GetTeamSettings(ctx context.Context, teamID string) (*Team
 	err := row.Scan(
 		&ts.TeamID, &domainsJSON, &ts.ClusterThreshold, &ts.PipelineMinEntries, &ts.AgentModel,
 		&ts.AnthropicAPIKey, &ts.AnthropicModel, &ts.OllamaURL, &ts.OllamaModel,
-		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsJSON, &updatedAt,
+		&ts.LLMProvider, &ts.OllamaLLMModel, &aiTouchpointsJSON,
+		&ts.EmbeddingMaxTokens, &ts.ChunkOverlapTokens, &ts.MaxChunks, &updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -610,9 +612,10 @@ func (s *SQLiteStore) PutTeamSettings(ctx context.Context, ts TeamSettings) erro
 		INSERT INTO team_settings (
 			team_id, domains, cluster_threshold, pipeline_min_entries, agent_model,
 			anthropic_api_key, anthropic_model, ollama_url, ollama_model,
-			llm_provider, ollama_llm_model, ai_touchpoints, updated_at
+			llm_provider, ollama_llm_model, ai_touchpoints,
+			embedding_max_tokens, chunk_overlap_tokens, max_chunks, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(team_id) DO UPDATE SET
 			domains              = excluded.domains,
 			cluster_threshold    = excluded.cluster_threshold,
@@ -625,10 +628,14 @@ func (s *SQLiteStore) PutTeamSettings(ctx context.Context, ts TeamSettings) erro
 			llm_provider         = excluded.llm_provider,
 			ollama_llm_model     = excluded.ollama_llm_model,
 			ai_touchpoints       = excluded.ai_touchpoints,
+			embedding_max_tokens = excluded.embedding_max_tokens,
+			chunk_overlap_tokens = excluded.chunk_overlap_tokens,
+			max_chunks           = excluded.max_chunks,
 			updated_at           = CURRENT_TIMESTAMP
 	`, ts.TeamID, string(domainsJSON), ts.ClusterThreshold, ts.PipelineMinEntries, ts.AgentModel,
 		ts.AnthropicAPIKey, ts.AnthropicModel, ts.OllamaURL, ts.OllamaModel,
-		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON))
+		ts.LLMProvider, ts.OllamaLLMModel, string(aiTouchpointsJSON),
+		ts.EmbeddingMaxTokens, ts.ChunkOverlapTokens, ts.MaxChunks)
 	if err != nil {
 		return fmt.Errorf("put team settings: %w", err)
 	}

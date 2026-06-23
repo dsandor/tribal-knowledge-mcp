@@ -19,10 +19,16 @@ import (
 // --- mock Store ---
 
 type mockStore struct {
-	entries   []storage.KnowledgeEntry
-	storeErr  error
-	listErr   error
-	deleteErr error
+	entries    []storage.KnowledgeEntry
+	storeErr   error
+	listErr    error
+	deleteErr  error
+	lastChunks []storage.EntryChunk // captured from the most recent StoreEntryChunked call
+	// visRules maps a user id to that user's suppression rules (used by the
+	// per-user visibility filter tests). nil for all other users.
+	visRules map[string][]storage.VisibilityRule
+	// users maps a user id to a stored User (for owner-identity resolution).
+	users map[string]storage.User
 }
 
 func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []float32) (string, error) {
@@ -35,6 +41,19 @@ func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []
 	e.Version = 1
 	m.entries = append(m.entries, e)
 	return e.ID, nil
+}
+
+func (m *mockStore) StoreEntryChunked(ctx context.Context, e storage.KnowledgeEntry, chunks []storage.EntryChunk) (string, error) {
+	m.lastChunks = chunks
+	var emb []float32
+	if len(chunks) > 0 {
+		emb = chunks[0].Embedding
+	}
+	return m.StoreEntry(ctx, e, emb)
+}
+
+func (m *mockStore) ReplaceEntryChunks(_ context.Context, _ string, _ []storage.EntryChunk) error {
+	return nil
 }
 
 func (m *mockStore) GetEntry(_ context.Context, id string) (*storage.KnowledgeEntry, error) {
@@ -106,6 +125,55 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 	return nil, nil
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) AddVisibilityRule(_ context.Context, userID, ruleType, value string) (storage.VisibilityRule, error) {
+	if m.visRules == nil {
+		m.visRules = map[string][]storage.VisibilityRule{}
+	}
+	for _, r := range m.visRules[userID] {
+		if r.RuleType == ruleType && r.Value == value {
+			return r, nil // idempotent
+		}
+	}
+	r := storage.VisibilityRule{
+		ID:        "vis-" + userID + "-" + ruleType + "-" + value,
+		UserID:    userID,
+		RuleType:  ruleType,
+		Value:     value,
+		CreatedAt: time.Now(),
+	}
+	m.visRules[userID] = append(m.visRules[userID], r)
+	return r, nil
+}
+func (m *mockStore) DeleteVisibilityRule(_ context.Context, userID, ruleType, value string) error {
+	rules := m.visRules[userID]
+	for i, r := range rules {
+		if r.RuleType == ruleType && r.Value == value {
+			m.visRules[userID] = append(rules[:i], rules[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+func (m *mockStore) ListVisibilityRules(_ context.Context, userID string) ([]storage.VisibilityRule, error) {
+	return m.visRules[userID], nil
+}
+func (m *mockStore) CreateShare(_ context.Context, _, _, _ string) (storage.KnowledgeShare, error) {
+	return storage.KnowledgeShare{}, nil
+}
+func (m *mockStore) GetShare(_ context.Context, _ string) (*storage.KnowledgeShare, error) {
+	return nil, storage.ErrNotFound
+}
+func (m *mockStore) MarkShareUsed(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockStore) RevokeShare(_ context.Context, _ string) error         { return nil }
+
+// GetUserByID lets the visibility helper resolve owner identities. The base
+// storage.Store interface does not require it; the helper type-asserts for it.
+func (m *mockStore) GetUserByID(_ context.Context, id string) (*storage.User, error) {
+	if u, ok := m.users[id]; ok {
+		return &u, nil
+	}
+	return nil, storage.ErrNotFound
+}
 
 // --- mock Embedder ---
 
@@ -152,6 +220,25 @@ func newTestSources(e embedding.Embedder, c llm.Client) *aiconfig.Sources {
 	return &aiconfig.Sources{
 		Resolver:    resolver,
 		LLM:         &fakeLLMProvider{c: c},
+		Embed:       &fakeEmbedProvider{e: e},
+		DefaultTeam: "test",
+	}
+}
+
+// newChunkedTestSources builds a *aiconfig.Sources like newTestSources but with
+// a small embedding token budget so content larger than maxTokens is split into
+// multiple chunks by the store path.
+func newChunkedTestSources(e embedding.Embedder, maxTokens int) *aiconfig.Sources {
+	resolver := aiconfig.NewResolver(&fakeSettingsStore{}, aiconfig.EnvDefaults{
+		AnthropicAPIKey:    "test-key",
+		AnthropicModel:     "test-model",
+		OllamaURL:          "http://test-ollama",
+		OllamaModel:        "test-model",
+		EmbeddingMaxTokens: maxTokens,
+	})
+	return &aiconfig.Sources{
+		Resolver:    resolver,
+		LLM:         &fakeLLMProvider{c: nil},
 		Embed:       &fakeEmbedProvider{e: e},
 		DefaultTeam: "test",
 	}
@@ -238,6 +325,88 @@ func TestHandleKnowledgeStore_Success(t *testing.T) {
 	responseText := textContent(result)
 	if responseText == "" {
 		t.Error("expected non-empty response text with entry ID")
+	}
+}
+
+func TestHandleKnowledgeStore_ChunksLargeContent(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	// Tiny token budget so multi-paragraph content must split. CountTokens is
+	// runes/4 and the chunker applies a 0.9 safety fraction, so a budget of 10
+	// tokens (~36 runes effective) forces several chunks for the content below.
+	handler := internalmcp.HandleKnowledgeStore(store, newChunkedTestSources(embedder, 10))
+
+	large := "First paragraph with enough words to matter here.\n\n" +
+		"Second paragraph that also carries meaningful content for chunking.\n\n" +
+		"Third paragraph rounding out the document so it clearly exceeds budget."
+	req := callReq(
+		"title", "Large Doc",
+		"content", large,
+		"type", "knowledge",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+
+	if len(store.lastChunks) <= 1 {
+		t.Fatalf("expected store to receive >1 chunk, got %d", len(store.lastChunks))
+	}
+
+	var res struct {
+		ChunkCount         int `json:"chunk_count"`
+		EmbeddingMaxTokens int `json:"embedding_max_tokens"`
+	}
+	if err := json.Unmarshal([]byte(textContent(result)), &res); err != nil {
+		t.Fatalf("parse result JSON: %v", err)
+	}
+	if res.ChunkCount <= 1 {
+		t.Errorf("chunk_count: got %d, want > 1", res.ChunkCount)
+	}
+	if res.ChunkCount != len(store.lastChunks) {
+		t.Errorf("chunk_count %d != chunks sent to store %d", res.ChunkCount, len(store.lastChunks))
+	}
+	if res.EmbeddingMaxTokens != 10 {
+		t.Errorf("embedding_max_tokens: got %d, want 10", res.EmbeddingMaxTokens)
+	}
+}
+
+func TestHandleKnowledgeStore_TinyContentSingleChunk(t *testing.T) {
+	store := &mockStore{}
+	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
+
+	handler := internalmcp.HandleKnowledgeStore(store, newChunkedTestSources(embedder, 10))
+	req := callReq(
+		"title", "Tiny",
+		"content", "Short.",
+		"type", "knowledge",
+	)
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool returned error: %s", textContent(result))
+	}
+
+	if len(store.lastChunks) != 1 {
+		t.Fatalf("expected exactly 1 chunk, got %d", len(store.lastChunks))
+	}
+
+	var res struct {
+		ChunkCount int `json:"chunk_count"`
+	}
+	if err := json.Unmarshal([]byte(textContent(result)), &res); err != nil {
+		t.Fatalf("parse result JSON: %v", err)
+	}
+	if res.ChunkCount != 1 {
+		t.Errorf("chunk_count: got %d, want 1", res.ChunkCount)
 	}
 }
 

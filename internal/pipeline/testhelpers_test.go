@@ -188,6 +188,12 @@ func (m *mockAnalysisStore) ListPipelineRuns(_ context.Context, teamID string, l
 func (m *mockAnalysisStore) StoreEntry(_ context.Context, _ storage.KnowledgeEntry, _ []float32) (string, error) {
 	return "", nil
 }
+func (m *mockAnalysisStore) StoreEntryChunked(_ context.Context, _ storage.KnowledgeEntry, _ []storage.EntryChunk) (string, error) {
+	return "", nil
+}
+func (m *mockAnalysisStore) ReplaceEntryChunks(_ context.Context, _ string, _ []storage.EntryChunk) error {
+	return nil
+}
 func (m *mockAnalysisStore) GetEntry(_ context.Context, _ string) (*storage.KnowledgeEntry, error) {
 	return nil, nil
 }
@@ -226,6 +232,21 @@ func (m *mockAnalysisStore) BulkImport(_ context.Context, _ []storage.KnowledgeE
 	return 0, 0, nil, nil
 }
 func (m *mockAnalysisStore) BackfillTeamID(_ context.Context, _ string) error   { return nil }
+func (m *mockAnalysisStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
+	return storage.VisibilityRule{}, nil
+}
+func (m *mockAnalysisStore) DeleteVisibilityRule(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAnalysisStore) ListVisibilityRules(_ context.Context, _ string) ([]storage.VisibilityRule, error) {
+	return nil, nil
+}
+func (m *mockAnalysisStore) CreateShare(_ context.Context, _, _, _ string) (storage.KnowledgeShare, error) {
+	return storage.KnowledgeShare{}, nil
+}
+func (m *mockAnalysisStore) GetShare(_ context.Context, _ string) (*storage.KnowledgeShare, error) {
+	return nil, storage.ErrNotFound
+}
+func (m *mockAnalysisStore) MarkShareUsed(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAnalysisStore) RevokeShare(_ context.Context, _ string) error         { return nil }
 func (m *mockAnalysisStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
 func (m *mockAnalysisStore) GetAnalysisCache(_ context.Context, kind, key string) (string, bool, error) {
 	m.cacheMu.Lock()

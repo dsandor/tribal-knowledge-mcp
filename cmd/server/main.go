@@ -157,13 +157,16 @@ func main() {
 	// Build the AI sources layer. Clients are resolved per call so saved team
 	// settings (AI config) take effect immediately without a restart.
 	envDefaults := aiconfig.EnvDefaults{
-		AnthropicAPIKey: cfg.AnthropicAPIKey,
-		AnthropicModel:  cfg.AnthropicModel,
-		AgentModel:      cfg.AgentModel,
-		OllamaURL:       cfg.OllamaURL,
-		OllamaModel:     cfg.OllamaModel,
-		LLMProvider:     cfg.LLMProvider,
-		OllamaLLMModel:  cfg.OllamaLLMModel,
+		AnthropicAPIKey:    cfg.AnthropicAPIKey,
+		AnthropicModel:     cfg.AnthropicModel,
+		AgentModel:         cfg.AgentModel,
+		OllamaURL:          cfg.OllamaURL,
+		OllamaModel:        cfg.OllamaModel,
+		LLMProvider:        cfg.LLMProvider,
+		OllamaLLMModel:     cfg.OllamaLLMModel,
+		EmbeddingMaxTokens: cfg.EmbeddingMaxTokens,
+		ChunkOverlapTokens: cfg.ChunkOverlapTokens,
+		MaxChunks:          cfg.MaxChunks,
 	}
 	resolver := aiconfig.NewResolver(store, envDefaults)
 	src := &aiconfig.Sources{
@@ -246,6 +249,8 @@ func main() {
 	internalmcp.RegisterRuleTools(mcpServer, store)
 	internalmcp.RegisterAgentTools(mcpServer, store)
 	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, src, liveHub)
+	internalmcp.RegisterVisibilityTools(mcpServer, store)
+	internalmcp.RegisterShareTools(mcpServer, store, src)
 	internalmcp.RegisterUsageTools(mcpServer, store, liveHub)
 	internalmcp.RegisterResources(mcpServer, store)
 	internalmcp.RegisterPromptSuggest(mcpServer, store, src)
