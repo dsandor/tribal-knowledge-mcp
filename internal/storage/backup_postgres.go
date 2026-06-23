@@ -15,7 +15,15 @@ func (s *PostgresStore) DumpTable(ctx context.Context, table string, fn func(map
 	if !validTableName(table) {
 		return fmt.Errorf("invalid table name %q", table)
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT * FROM "+table) //nolint:gosec // allowlisted
+	// Dump only insertable (non-generated) columns. Generated columns such as
+	// entries.fts_vector are derived and are recomputed on the target; including
+	// them would bloat the archive and break restore (you cannot insert into a
+	// GENERATED column, and the column may not exist on a different engine).
+	colNames, err := s.insertableColumns(ctx, table)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM %s", quoteIdents(colNames), table)) //nolint:gosec // allowlisted
 	if err != nil {
 		return fmt.Errorf("select %s: %w", table, err)
 	}
@@ -79,9 +87,17 @@ func (s *PostgresStore) LoadTable(ctx context.Context, table string, rows []map[
 	if err != nil {
 		return err
 	}
+	// Insert an explicit list of insertable (non-generated) columns. A bare
+	// SELECT * would also feed GENERATED columns (e.g. entries.fts_vector), which
+	// Postgres rejects with "cannot insert non-DEFAULT value into column".
+	colNames, err := s.insertableColumns(ctx, table)
+	if err != nil {
+		return err
+	}
+	quoted := quoteIdents(colNames)
 	// json_populate_record coerces every column to the table's real types
 	// (text->timestamptz, number->integer, etc.) using Postgres input functions.
-	stmt := fmt.Sprintf("INSERT INTO %s SELECT * FROM json_populate_record(NULL::%s, $1::json)", table, table) //nolint:gosec // table allowlisted
+	stmt := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM json_populate_record(NULL::%s, $1::json)", table, quoted, quoted, table) //nolint:gosec // table allowlisted
 	for _, r := range rows {
 		coerceBooleanColumns(r, boolCols)
 		coerceNotNullColumns(r, notNullCols)
@@ -182,6 +198,46 @@ func (s *PostgresStore) booleanColumns(ctx context.Context, table string) (map[s
 		out[c] = true
 	}
 	return out, rows.Err()
+}
+
+// insertableColumns returns the names of a table's columns that are NOT
+// generated, in ordinal order. Generated columns (e.g. a STORED tsvector) cannot
+// be written and must be excluded from both dumps and inserts.
+func (s *PostgresStore) insertableColumns(ctx context.Context, table string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_name = $1 AND is_generated = 'NEVER'
+		 ORDER BY ordinal_position`, table)
+	if err != nil {
+		return nil, fmt.Errorf("introspect insertable columns for %s: %w", table, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no insertable columns found for %s", table)
+	}
+	return out, nil
+}
+
+// quoteIdents double-quotes each identifier and joins them with commas, for use
+// in a column list. Column names come from information_schema introspection of
+// allowlisted tables, not user input.
+func quoteIdents(idents []string) string {
+	quoted := make([]string, len(idents))
+	for i, id := range idents {
+		quoted[i] = `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // notNullColumns returns each NOT NULL column of table mapped to its SQL

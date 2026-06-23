@@ -2,6 +2,19 @@ package storage
 
 import "testing"
 
+func TestQuoteIdents(t *testing.T) {
+	if got := quoteIdents([]string{"id", "team_id"}); got != `"id", "team_id"` {
+		t.Errorf("quoteIdents = %q", got)
+	}
+	if got := quoteIdents([]string{"a"}); got != `"a"` {
+		t.Errorf("single ident = %q", got)
+	}
+	// embedded quote is escaped by doubling
+	if got := quoteIdents([]string{`we"ird`}); got != `"we""ird"` {
+		t.Errorf("escaping = %q", got)
+	}
+}
+
 func TestCoerceNotNullColumns(t *testing.T) {
 	notNull := map[string]string{
 		"team_id":      "text",
