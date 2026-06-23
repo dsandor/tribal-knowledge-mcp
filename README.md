@@ -540,11 +540,36 @@ non-default file). The two stores are independent files/databases — switching 
 changes which one is used; it does **not** copy data between them. For that, use the recipe
 below.
 
-> **PostgreSQL must have the `pgvector` extension available.** On startup the server runs
-> `CREATE EXTENSION IF NOT EXISTS vector`, which only succeeds if pgvector is installed in the
-> instance. Use a pgvector-enabled image such as `pgvector/pgvector:pg17` (what the bundled
-> `docker-compose.yml` and `run.sh` use), or a managed Postgres where the `vector` extension
-> is available/enabled. A vanilla Postgres without pgvector will fail to start the server.
+> **PostgreSQL must have the `pgvector` extension available.** On startup the server checks
+> whether the `vector` extension is already installed and, only if it is missing, runs
+> `CREATE EXTENSION IF NOT EXISTS vector`. Use a pgvector-enabled image such as
+> `pgvector/pgvector:pg17` (what the bundled `docker-compose.yml` and `run.sh` use), or a
+> managed Postgres where the `vector` extension is available/enabled. A Postgres instance
+> where pgvector is neither installed nor installable will fail to start the server.
+
+#### Managed Postgres (AWS Aurora/RDS) with a least-privilege user
+
+On managed Postgres — e.g. AWS Aurora or RDS — the application's database user often does
+**not** have rights to create extensions. The server handles this: it reads `pg_extension`
+first (a plain catalog read that needs no special privilege) and only attempts
+`CREATE EXTENSION` when the extension is genuinely missing. So if pgvector is already
+installed, the app starts cleanly with a least-privilege user.
+
+Pre-create the extension **once** as a privileged user (the RDS/Aurora master user has the
+`rds_superuser` role), connected to the **writer** endpoint:
+
+```sql
+-- check availability (must return a row; bump the engine minor version if not)
+SELECT * FROM pg_available_extensions WHERE name = 'vector';
+
+-- install it (run on the primary writer)
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+For an **Aurora Global Database**, run `CREATE EXTENSION` only on the **primary region's
+writer** — secondary regions are read-only and receive the extension (and all data)
+automatically via storage-level replication. Point the app's `DATABASE_URL` at the primary
+writer endpoint, since the app performs writes and migrations on startup.
 
 ### Recipe: migrate SQLite → PostgreSQL
 

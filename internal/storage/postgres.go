@@ -40,12 +40,26 @@ func NewPostgresStore(dsn string, embeddingDim int) (*PostgresStore, error) {
 }
 
 func (s *PostgresStore) migrate() error {
-	_, err := s.db.Exec(`CREATE EXTENSION IF NOT EXISTS vector`)
-	if err != nil {
-		return fmt.Errorf("create vector extension: %w", err)
+	// Ensure pgvector is available. Many managed / least-privilege deployments
+	// (e.g. AWS Aurora) pre-create the extension and run the app with a user that
+	// lacks CREATE EXTENSION rights — and CREATE EXTENSION IF NOT EXISTS can still
+	// trip a privilege check there. So read the catalog first (a plain SELECT needs
+	// no special privilege) and only attempt creation when it is genuinely missing.
+	var hasVector bool
+	if err := s.db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')`,
+	).Scan(&hasVector); err != nil {
+		return fmt.Errorf("check vector extension: %w", err)
+	}
+	if !hasVector {
+		if _, err := s.db.Exec(`CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
+			return fmt.Errorf("vector extension is not installed and could not be created "+
+				"(the database user may lack CREATE EXTENSION rights — have a superuser run "+
+				"'CREATE EXTENSION vector;' once): %w", err)
+		}
 	}
 
-	_, err = s.db.Exec(`
+	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS entries (
 			id           TEXT PRIMARY KEY,
 			type         TEXT NOT NULL DEFAULT '',
