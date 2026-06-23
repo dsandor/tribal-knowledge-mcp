@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -142,6 +143,17 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	info, err := p.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
+		// Surface the real failure point (token endpoint vs id_token verify vs
+		// claims) and the config the exchange used. The client secret is never
+		// logged — only whether one was loaded, since it comes from a separate
+		// source (OIDC_CLIENT_SECRET env) than the rest of the OIDC config (DB).
+		slog.Warn("oidc exchange failed",
+			"err", err,
+			"issuer", cfg.OIDCIssuer,
+			"client_id", cfg.OIDCClientID,
+			"redirect_url", cfg.OIDCRedirectURL,
+			"client_secret_set", s.oidcSecret != "",
+		)
 		writeError(w, 401, "unauthorized", "OIDC exchange failed")
 		return
 	}
