@@ -76,6 +76,62 @@ func TestListTeams(t *testing.T) {
 	}
 }
 
+func TestClaimFirstSuperadmin(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	// First user on an empty deployment is promoted to superadmin.
+	uid1, err := s.UpsertUser(ctx, User{Email: "owner@acme.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("UpsertUser owner: %v", err)
+	}
+	promoted, err := s.ClaimFirstSuperadmin(ctx, uid1)
+	if err != nil {
+		t.Fatalf("ClaimFirstSuperadmin owner: %v", err)
+	}
+	if !promoted {
+		t.Fatal("first user should be promoted to superadmin")
+	}
+	u1, _ := s.GetUserByID(ctx, uid1)
+	if u1.Role != "superadmin" {
+		t.Errorf("owner Role = %q, want superadmin", u1.Role)
+	}
+	if !u1.ManuallyAssigned {
+		t.Error("promoted user should be marked manually_assigned")
+	}
+
+	// A second user is NOT promoted once a superadmin exists.
+	uid2, err := s.UpsertUser(ctx, User{Email: "member@acme.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("UpsertUser member: %v", err)
+	}
+	promoted2, err := s.ClaimFirstSuperadmin(ctx, uid2)
+	if err != nil {
+		t.Fatalf("ClaimFirstSuperadmin member: %v", err)
+	}
+	if promoted2 {
+		t.Fatal("second user should not be promoted when a superadmin exists")
+	}
+	u2, _ := s.GetUserByID(ctx, uid2)
+	if u2.Role != "member" {
+		t.Errorf("member Role = %q, want member (unchanged)", u2.Role)
+	}
+}
+
+func TestClaimFirstSuperadminUnknownUser(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	// Unknown user id on an empty deployment: no promotion, no error.
+	promoted, err := s.ClaimFirstSuperadmin(ctx, "does-not-exist")
+	if err != nil {
+		t.Fatalf("ClaimFirstSuperadmin unknown: %v", err)
+	}
+	if promoted {
+		t.Fatal("unknown user id should not be promoted")
+	}
+}
+
 func TestSetTeamEnabled(t *testing.T) {
 	s := newTestStoreInternal(t)
 	ctx := context.Background()

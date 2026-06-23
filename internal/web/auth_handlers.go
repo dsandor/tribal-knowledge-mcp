@@ -43,6 +43,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "unauthorized", "user not found")
 		return
 	}
+	// On a fresh deployment with no superadmin user, the first person to sign in
+	// owns it. Atomic and idempotent, so this is a cheap no-op on every later login.
+	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), user.ID); err == nil && promoted {
+		slog.Info("bootstrapped first superadmin", "user_id", user.ID, "email", info.Email, "via", "local")
+	}
 	sess := storage.Session{
 		UserID:    user.ID,
 		TokenHash: tokenHash,
@@ -185,6 +190,11 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			teamID = team.ID
 		}
 		_ = s.store.AutoAssignUserToTeam(r.Context(), uid, teamID, role)
+	}
+	// On a fresh deployment with no superadmin user, the first person to sign in
+	// owns it. Atomic and idempotent, so this is a cheap no-op on every later login.
+	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), uid); err == nil && promoted {
+		slog.Info("bootstrapped first superadmin", "user_id", uid, "email", info.Email, "via", "oidc")
 	}
 	sessionToken, tokenHash := generateToken()
 	_ = s.store.CreateSession(r.Context(), storage.Session{

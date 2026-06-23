@@ -395,6 +395,22 @@ func (s *SQLiteStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, 
 	return nil
 }
 
+// ClaimFirstSuperadmin promotes userID to superadmin iff no superadmin user
+// currently exists. The conditional UPDATE is atomic, so it is safe to call on
+// every login. Returns true only when this call performed the promotion.
+func (s *SQLiteStore) ClaimFirstSuperadmin(ctx context.Context, userID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET role = 'superadmin', manually_assigned = 1
+		 WHERE id = ? AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin')`,
+		userID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim first superadmin: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func (s *SQLiteStore) ResolveTeamByEmail(ctx context.Context, email string) (*Team, error) {
 	teams, err := s.ListTeams(ctx)
 	if err != nil {

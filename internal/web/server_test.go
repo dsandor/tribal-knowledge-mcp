@@ -239,6 +239,9 @@ func (m *mockStore) AutoAssignUserToTeam(_ context.Context, userID, teamID, role
 func (m *mockStore) ResolveTeamByEmail(_ context.Context, email string) (*storage.Team, error) {
 	return nil, nil
 }
+func (m *mockStore) ClaimFirstSuperadmin(_ context.Context, userID string) (bool, error) {
+	return false, nil
+}
 func (m *mockStore) CreateAPIKey(_ context.Context, key storage.APIKey) error { return nil }
 
 // GetAPIKeyByHash returns a valid admin API key for any hash — allows tests to pass auth middleware.

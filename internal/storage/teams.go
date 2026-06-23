@@ -157,6 +157,11 @@ type TeamStore interface {
 	// ResolveTeamByEmail returns the first enabled team whose domain_patterns
 	// contains a regex matching email; returns nil (no error) if none match.
 	ResolveTeamByEmail(ctx context.Context, email string) (*Team, error)
+	// ClaimFirstSuperadmin promotes userID to superadmin iff no superadmin user
+	// currently exists, so the first user to sign in on a fresh deployment owns
+	// it. Atomic and idempotent; returns true only when it performed the
+	// promotion.
+	ClaimFirstSuperadmin(ctx context.Context, userID string) (bool, error)
 
 	// API keys
 	CreateAPIKey(ctx context.Context, key APIKey) error

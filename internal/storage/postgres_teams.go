@@ -486,6 +486,22 @@ func (s *PostgresStore) AssignUserToTeam(ctx context.Context, userID, teamID, ro
 	return nil
 }
 
+// ClaimFirstSuperadmin promotes userID to superadmin iff no superadmin user
+// currently exists. The conditional UPDATE is atomic, so it is safe to call on
+// every login. Returns true only when this call performed the promotion.
+func (s *PostgresStore) ClaimFirstSuperadmin(ctx context.Context, userID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET role = 'superadmin', manually_assigned = TRUE
+		 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin')`,
+		userID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim first superadmin: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func (s *PostgresStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error {
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE users SET team_id = $1, role = $2 WHERE id = $3 AND manually_assigned = FALSE",

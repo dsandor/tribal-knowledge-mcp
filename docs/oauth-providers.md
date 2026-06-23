@@ -156,6 +156,12 @@ provider; after a successful login the user lands back on `/` with an active 24-
 session. There is no sign-up step — corporate users are provisioned automatically on
 first login.
 
+> **First user owns the deployment.** On a fresh deployment with no superadmin user
+> yet, the **first person to sign in is automatically promoted to `superadmin`**, so
+> initial onboarding (creating teams, etc.) needs no manual key configuration. Once a
+> superadmin exists, subsequent users default to `member`. `SUPERADMIN_KEY` remains
+> available as a break-glass/automation key but is no longer required to onboard.
+
 The superadmin can still sign in with the bootstrap key via the **Administrator
 sign-in** link on the same page (see [Superadmin](#superadmin-access)).
 
@@ -179,7 +185,8 @@ On each OIDC login the app provisions the user and assigns them to the **first e
 team whose whitelist matches** their email. For example `alice@acme.com` lands in the
 team whose patterns include `@acme\.com$`.
 
-- New users default to the `member` role.
+- New users default to the `member` role (except the very first user on a fresh
+  deployment, who is promoted to `superadmin` — see [Step 4](#step-4--sign-in)).
 - If **no** team whitelist matches, the user is placed in the reserved **Unassigned**
   team (seeded automatically at startup). An admin can move them from **Admin → Teams /
   Users** at any time.
