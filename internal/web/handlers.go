@@ -59,22 +59,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tc := auth.GetTeamContext(ctx)
 
-	count, err := s.store.CountEntries(ctx, tc.TeamID)
+	count, err := s.store.CountEntries(ctx, tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("count entries: %v", err))
 		return
 	}
-	clusters, err := s.store.ListClusters(ctx, tc.TeamID)
+	clusters, err := s.store.ListClusters(ctx, tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
 	}
-	agents, err := s.store.ListAgents(ctx, tc.TeamID)
+	agents, err := s.store.ListAgents(ctx, tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
 		return
 	}
-	run, err := s.store.GetLatestPipelineRun(ctx, tc.TeamID)
+	run, err := s.store.GetLatestPipelineRun(ctx, tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
 		return
@@ -135,7 +135,7 @@ func (s *Server) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 		Limit:  limit,
 		Offset: offset,
 		Search: q.Get("search"),
-		TeamID: tc.TeamID,
+		TeamID: tc.ListScopeTeamID(),
 	}
 	entries, err := s.store.ListEntries(r.Context(), filter)
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Server) handleKnowledgeRate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClusterList(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
-	clusters, err := s.store.ListClusters(r.Context(), tc.TeamID)
+	clusters, err := s.store.ListClusters(r.Context(), tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list clusters: %v", err))
 		return
@@ -223,7 +223,7 @@ func (s *Server) handleClusterList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDatasetList(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
-	snaps, err := s.store.ListSnapshots(r.Context(), tc.TeamID)
+	snaps, err := s.store.ListSnapshots(r.Context(), tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list snapshots: %v", err))
 		return
@@ -287,7 +287,7 @@ func (s *Server) handleDatasetExport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
-	agents, err := s.store.ListAgents(r.Context(), tc.TeamID)
+	agents, err := s.store.ListAgents(r.Context(), tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list agents: %v", err))
 		return
@@ -436,7 +436,7 @@ func (s *Server) handleAgentRefactor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load relevant knowledge entries for context (same domain, up to 20, scoped to team).
-	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20, TeamID: tc.TeamID})
+	entries, _ := s.store.ListEntries(ctx, storage.ListFilter{Domain: current.Domain, Limit: 20, TeamID: tc.ListScopeTeamID()})
 
 	revised, err := agentpkg.Refactor(ctx, agentLLM, current, entries, body.Feedback)
 	if err != nil {
@@ -566,7 +566,7 @@ func (s *Server) handleAgentBulkExport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePipelineStatus(w http.ResponseWriter, r *http.Request) {
 	tc := auth.GetTeamContext(r.Context())
-	run, err := s.store.GetLatestPipelineRun(r.Context(), tc.TeamID)
+	run, err := s.store.GetLatestPipelineRun(r.Context(), tc.ListScopeTeamID())
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("get pipeline run: %v", err))
 		return
@@ -585,7 +585,7 @@ func (s *Server) handleListPipelineRuns(w http.ResponseWriter, r *http.Request) 
 	if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 		limit = n
 	}
-	runs, err := s.store.ListPipelineRuns(r.Context(), tc.TeamID, limit)
+	runs, err := s.store.ListPipelineRuns(r.Context(), tc.ListScopeTeamID(), limit)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list pipeline runs: %v", err))
 		return
@@ -615,6 +615,16 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "title, content, and type are required")
 		return
 	}
+	// Resolve the team this entry should land in. A superadmin in see-all mode
+	// (empty tc.TeamID, no X-Team-Id) falls back to their home team rather than
+	// writing a team-less record.
+	home := ""
+	if tc.UserID != "" {
+		if u, err := s.store.GetUserByID(r.Context(), tc.UserID); err == nil {
+			home = u.TeamID
+		}
+	}
+	target := tc.WriteTargetTeamID(home)
 	entry := storage.KnowledgeEntry{
 		Type:        storage.KnowledgeType(body.Type),
 		Title:       body.Title,
@@ -622,8 +632,8 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 		Description: body.Description,
 		Domain:      body.Domain,
 		Author:      body.Author,
-		Team:        tc.TeamID,
-		TeamID:      tc.TeamID,
+		Team:        target,
+		TeamID:      target,
 		Tags:        tagspkg.Merge(body.Tags, tagspkg.ExtractHashtags(body.Title+" "+body.Content)),
 		Status:      "pending",
 	}
@@ -637,7 +647,7 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 	if s.aiSrc != nil {
 		entry.ID = id
 		tagger := &tagspkg.AutoTagger{Store: s.store, LLMFor: s.aiSrc.ImprovementLLM}
-		tagger.TagEntryAsync(r.Context(), entry, tc.TeamID)
+		tagger.TagEntryAsync(r.Context(), entry, target)
 	}
 
 	// Publish a live event so connected SSE clients see the new entry in real time.
@@ -647,7 +657,7 @@ func (s *Server) handleKnowledgeStore(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishLive(live.LiveEvent{
 		Type:    live.TypeKnowledgeStored,
-		TeamID:  tc.TeamID,
+		TeamID:  target,
 		EntryID: id,
 		Title:   live.CapFragment(body.Title),
 		Actor:   live.ActorRef{ID: actorID, Display: tc.Display},

@@ -27,10 +27,22 @@ type mockStore struct {
 	// apiKeyUserID, when non-empty, makes GetAPIKeyByHash return a user-scoped
 	// key so the request carries that UserID (exercises per-user visibility).
 	apiKeyUserID string
+	// apiKeyRole, when non-empty, overrides the role on the key returned by
+	// GetAPIKeyByHash (defaults to "admin").
+	apiKeyRole string
+	// memberOf drives IsTeamMember: true when memberOf[teamID] is set.
+	memberOf map[string]bool
+	// addMemberCalled records whether AddTeamMember was invoked.
+	addMemberCalled bool
 	// visRules maps a user id to that user's suppression rules.
 	visRules map[string][]storage.VisibilityRule
 	// users maps a user id to a stored User (for owner-identity resolution).
 	users map[string]storage.User
+	// userTeams is returned by ListUserTeams (exercises the per-user team list).
+	userTeams []storage.Team
+	// teams maps a team id to a stored Team; when present, GetTeam returns it
+	// (exercises target-team validation). Empty map preserves the nil default.
+	teams map[string]storage.Team
 }
 
 // --- AgentStore / AnalysisStore / Store methods ---
@@ -199,8 +211,13 @@ func (m *mockStore) ListAgentVersions(_ context.Context, _ string) ([]storage.Ag
 func (m *mockStore) CreateTeam(_ context.Context, t storage.Team) (string, error) {
 	return "", nil
 }
-func (m *mockStore) GetTeam(_ context.Context, id string) (*storage.Team, error) { return nil, nil }
-func (m *mockStore) ListTeams(_ context.Context) ([]storage.Team, error)         { return nil, nil }
+func (m *mockStore) GetTeam(_ context.Context, id string) (*storage.Team, error) {
+	if t, ok := m.teams[id]; ok {
+		return &t, nil
+	}
+	return nil, nil
+}
+func (m *mockStore) ListTeams(_ context.Context) ([]storage.Team, error) { return nil, nil }
 func (m *mockStore) SetTeamEnabled(_ context.Context, id string, enabled bool) error {
 	return nil
 }
@@ -236,6 +253,7 @@ func (m *mockStore) AssignUserToTeam(_ context.Context, userID, teamID, role str
 func (m *mockStore) AutoAssignUserToTeam(_ context.Context, userID, teamID, role string) error {
 	return nil
 }
+func (m *mockStore) SetUserRole(_ context.Context, _, _ string) error { return nil }
 func (m *mockStore) ResolveTeamByEmail(_ context.Context, email string) (*storage.Team, error) {
 	return nil, nil
 }
@@ -248,7 +266,11 @@ func (m *mockStore) CreateAPIKey(_ context.Context, key storage.APIKey) error { 
 // When apiKeyUserID is set the key is user-scoped, so the request's TeamContext
 // carries that UserID and the per-user visibility filter activates.
 func (m *mockStore) GetAPIKeyByHash(_ context.Context, hash string) (*storage.APIKey, error) {
-	return &storage.APIKey{ID: "test-key", TeamID: "test-team", Role: "admin", KeyHash: hash, UserID: m.apiKeyUserID}, nil
+	role := m.apiKeyRole
+	if role == "" {
+		role = "admin"
+	}
+	return &storage.APIKey{ID: "test-key", TeamID: "test-team", Role: role, KeyHash: hash, UserID: m.apiKeyUserID}, nil
 }
 func (m *mockStore) ListAPIKeys(_ context.Context, teamID string) ([]storage.APIKey, error) {
 	return nil, nil
@@ -297,6 +319,9 @@ func (m *mockStore) ListPipelineRuns(_ context.Context, _ string, _ int) ([]stor
 	return nil, nil
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) ReassignEntriesTeam(_ context.Context, _ []string, _ string) error {
+	return nil
+}
 func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
 	return storage.VisibilityRule{}, nil
 }
@@ -319,6 +344,17 @@ func (m *mockStore) GetAnalysisCache(_ context.Context, _, _ string) (string, bo
 func (m *mockStore) PutAnalysisCache(_ context.Context, _, _, _, _ string) error { return nil }
 func (m *mockStore) PruneAnalysisCache(_ context.Context, _ time.Duration) (int, error) {
 	return 0, nil
+}
+func (m *mockStore) AddTeamMember(_ context.Context, _, _ string) error {
+	m.addMemberCalled = true
+	return nil
+}
+func (m *mockStore) RemoveTeamMember(_ context.Context, _, _ string) error { return nil }
+func (m *mockStore) ListUserTeams(_ context.Context, _ string) ([]storage.Team, error) {
+	return m.userTeams, nil
+}
+func (m *mockStore) IsTeamMember(_ context.Context, _, teamID string) (bool, error) {
+	return m.memberOf[teamID], nil
 }
 
 // Compile-time check that *mockStore satisfies web.AllStore.

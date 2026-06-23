@@ -385,6 +385,21 @@ func (s *SQLiteStore) AssignUserToTeam(ctx context.Context, userID, teamID, role
 	return nil
 }
 
+func (s *SQLiteStore) SetUserRole(ctx context.Context, userID, role string) error {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE users SET role = ? WHERE id = ?",
+		role, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("set user role: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %q: %w", userID, ErrNotFound)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error {
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE users SET team_id = ?, role = ? WHERE id = ? AND manually_assigned = 0",
@@ -793,6 +808,74 @@ func scanAPIKey(row scanner) (*APIKey, error) {
 		k.LastUsedAt = &t
 	}
 	return &k, nil
+}
+
+// ── Team memberships ──────────────────────────────────────────────────────────
+
+func (s *SQLiteStore) AddTeamMember(ctx context.Context, userID, teamID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO team_members (user_id, team_id) VALUES (?, ?)`, userID, teamID)
+	if err != nil {
+		return fmt.Errorf("add team member: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) RemoveTeamMember(ctx context.Context, userID, teamID string) error {
+	u, err := s.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.TeamID == teamID {
+		return fmt.Errorf("cannot remove home team membership: %w", ErrInvalid)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`DELETE FROM team_members WHERE user_id = ? AND team_id = ?`, userID, teamID)
+	if err != nil {
+		return fmt.Errorf("remove team member: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) IsTeamMember(ctx context.Context, userID, teamID string) (bool, error) {
+	u, err := s.GetUserByID(ctx, userID)
+	if err == nil && u.TeamID == teamID && teamID != "" {
+		return true, nil
+	}
+	var one int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM team_members WHERE user_id = ? AND team_id = ?`, userID, teamID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("is team member: %w", err)
+	}
+	return true, nil
+}
+
+func (s *SQLiteStore) ListUserTeams(ctx context.Context, userID string) ([]Team, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT t.id, t.name, COALESCE(t.enabled,1)
+		FROM teams t
+		WHERE t.id = (SELECT team_id FROM users WHERE id = ?)
+		   OR t.id IN (SELECT team_id FROM team_members WHERE user_id = ?)
+		ORDER BY t.name`, userID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user teams: %w", err)
+	}
+	defer rows.Close()
+	var out []Team
+	for rows.Next() {
+		var t Team
+		var enabled int
+		if err := rows.Scan(&t.ID, &t.Name, &enabled); err != nil {
+			return nil, fmt.Errorf("scan user team: %w", err)
+		}
+		t.Enabled = enabled != 0
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // ── Misc helpers ──────────────────────────────────────────────────────────────

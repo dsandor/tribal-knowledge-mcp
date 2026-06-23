@@ -154,6 +154,76 @@ func TestImport_CreatesPendingEntryInDestTeam(t *testing.T) {
 	}
 }
 
+func TestCopyEntryToTeam_CreatesPendingEntryInDestTeam(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	src := newTestSources(stubEmbedder{})
+
+	entryID := storeSourceEntry(t, store)
+
+	// No share token involved — copy straight into the destination team.
+	newID, err := sharing.CopyEntryToTeam(ctx, store, src, entryID, "teamB", "bob")
+	if err != nil {
+		t.Fatalf("CopyEntryToTeam: %v", err)
+	}
+	if newID == "" || newID == entryID {
+		t.Fatalf("expected a fresh entry id, got %q (source %q)", newID, entryID)
+	}
+
+	got, err := store.GetEntry(ctx, newID)
+	if err != nil {
+		t.Fatalf("GetEntry(new): %v", err)
+	}
+	if got.TeamID != "teamB" {
+		t.Errorf("TeamID = %q, want teamB", got.TeamID)
+	}
+	if got.Status != "pending" {
+		t.Errorf("Status = %q, want pending", got.Status)
+	}
+	if got.Author != "alice" {
+		t.Errorf("Author = %q, want preserved alice", got.Author)
+	}
+	if got.Title != "Earnings Summary Prompt" {
+		t.Errorf("Title = %q, want preserved", got.Title)
+	}
+
+	// Searchable: the new entry has chunk vectors.
+	results, err := store.SearchSimilar(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 10)
+	if err != nil {
+		t.Fatalf("SearchSimilar: %v", err)
+	}
+	found := false
+	for _, r := range results {
+		if r.Entry.ID == newID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("copied entry %q not found in SearchSimilar results (no chunk vectors?)", newID)
+	}
+}
+
+func TestCopyEntryToTeam_UnknownEntry_Errors(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	src := newTestSources(stubEmbedder{})
+
+	if _, err := sharing.CopyEntryToTeam(ctx, store, src, "does-not-exist", "teamB", "bob"); err == nil {
+		t.Fatalf("expected error copying nonexistent entry")
+	}
+}
+
+func TestCopyEntryToTeam_NilEmbedder_Errors(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	src := newNilEmbedSources()
+
+	entryID := storeSourceEntry(t, store)
+	if _, err := sharing.CopyEntryToTeam(ctx, store, src, entryID, "teamB", "bob"); err == nil {
+		t.Fatalf("expected error when embedding not configured")
+	}
+}
+
 func TestImport_BurnsToken(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t)
@@ -230,5 +300,42 @@ func TestImport_NilEmbedder_Errors(t *testing.T) {
 	}
 	if _, err := sharing.Import(ctx, store, src, share.ID, "teamB", "bob"); err == nil {
 		t.Fatalf("expected error when embedding not configured")
+	}
+}
+
+func TestImport_NilEmbedder_DoesNotBurnToken(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+
+	entryID := storeSourceEntry(t, store)
+	share, err := sharing.CreateShare(ctx, store, entryID, "teamA", "alice")
+	if err != nil {
+		t.Fatalf("CreateShare: %v", err)
+	}
+
+	// First attempt against a destination team with no embedder: must fail-fast
+	// WITHOUT burning the single-use token.
+	nilSrc := newNilEmbedSources()
+	if _, err := sharing.Import(ctx, store, nilSrc, share.ID, "teamB", "bob"); err == nil {
+		t.Fatalf("expected error when embedding not configured")
+	}
+
+	// The token must NOT have been marked used.
+	got, err := store.GetShare(ctx, share.ID)
+	if err != nil {
+		t.Fatalf("GetShare: %v", err)
+	}
+	if got.UsedAt != nil {
+		t.Fatalf("token was burned on nil-embedder import; UsedAt = %v, want nil", got.UsedAt)
+	}
+
+	// Once an embedder is configured, the SAME share is still importable.
+	okSrc := newTestSources(stubEmbedder{})
+	newID, err := sharing.Import(ctx, store, okSrc, share.ID, "teamB", "bob")
+	if err != nil {
+		t.Fatalf("Import after embedder configured: %v", err)
+	}
+	if newID == "" || newID == entryID {
+		t.Fatalf("expected a fresh entry id, got %q (source %q)", newID, entryID)
 	}
 }

@@ -618,6 +618,25 @@ func (s *PostgresStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) e
 	return nil
 }
 
+func (s *PostgresStore) ReassignEntriesTeam(ctx context.Context, entryIDs []string, teamID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	stmt, err := tx.PrepareContext(ctx, `UPDATE entries SET team_id = $1 WHERE id = $2`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range entryIDs {
+		if _, err := stmt.ExecContext(ctx, teamID, id); err != nil {
+			return fmt.Errorf("reassign entry %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *PostgresStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {
 	autoTagsJSON, err := json.Marshal(tags)
 	if err != nil {

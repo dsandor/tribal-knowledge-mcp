@@ -16,9 +16,12 @@ import TableRow from '@mui/material/TableRow';
 import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import Chip from '@mui/material/Chip';
+import Snackbar from '@mui/material/Snackbar';
+import Tooltip from '@mui/material/Tooltip';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import Alert from '@mui/material/Alert';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
@@ -81,6 +84,32 @@ export default function AdminTeams() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(EMPTY_DELETE_STATE);
+  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyId = async (id: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(id);
+      } else {
+        // Fallback for insecure (non-HTTPS) contexts where navigator.clipboard is unavailable.
+        const ta = document.createElement('textarea');
+        ta.value = id;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopiedId(id);
+      setCopied(true);
+      setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
 
   const load = () => {
     fetchTeams().then((data: unknown) => {
@@ -268,7 +297,30 @@ export default function AdminTeams() {
                         autoFocus
                         sx={{ width: '100%' }}
                       />
-                    ) : t.name}
+                    ) : (
+                      <Box>
+                        <Box>{t.name}</Box>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                          <Typography
+                            component="span"
+                            sx={{ fontFamily: 'monospace', fontSize: 11, color: 'text.secondary', wordBreak: 'break-all' }}
+                          >
+                            {t.id}
+                          </Typography>
+                          <Tooltip title={copiedId === t.id ? 'Copied' : 'Copy team ID'}>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleCopyId(t.id)}
+                              sx={{ color: copiedId === t.id ? 'success.main' : 'text.secondary' }}
+                            >
+                              {copiedId === t.id
+                                ? <CheckIcon sx={{ fontSize: 14 }} />
+                                : <ContentCopyIcon sx={{ fontSize: 14 }} />}
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </Box>
+                    )}
                   </TableCell>
                   <TableCell>
                     {isEditing ? (
@@ -396,6 +448,14 @@ export default function AdminTeams() {
           </>
         )}
       </Dialog>
+
+      <Snackbar
+        open={copied}
+        autoHideDuration={2000}
+        onClose={() => setCopied(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        message="Team ID copied to clipboard"
+      />
     </Box>
   );
 }

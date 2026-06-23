@@ -46,8 +46,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// On a fresh deployment with no superadmin user, the first person to sign in
 	// owns it. Atomic and idempotent, so this is a cheap no-op on every later login.
-	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), user.ID); err == nil && promoted {
+	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), user.ID); err != nil {
+		slog.Warn("first-superadmin claim failed", "user_id", user.ID, "via", "local", "err", err)
+	} else if promoted {
 		slog.Info("bootstrapped first superadmin", "user_id", user.ID, "email", info.Email, "via", "local")
+	} else {
+		slog.Debug("first-superadmin promotion skipped: a superadmin already exists",
+			"user_id", user.ID, "role", user.Role, "via", "local")
 	}
 	sess := storage.Session{
 		UserID:    user.ID,
@@ -213,8 +218,15 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// On a fresh deployment with no superadmin user, the first person to sign in
 	// owns it. Atomic and idempotent, so this is a cheap no-op on every later login.
-	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), uid); err == nil && promoted {
+	if promoted, err := s.store.ClaimFirstSuperadmin(r.Context(), uid); err != nil {
+		slog.Warn("first-superadmin claim failed", "user_id", uid, "via", "oidc", "err", err)
+	} else if promoted {
 		slog.Info("bootstrapped first superadmin", "user_id", uid, "email", info.Email, "via", "oidc")
+	} else {
+		// Common steady-state path: a superadmin already exists, so this user keeps
+		// its current role. Logged at Debug to explain why no promotion occurred.
+		slog.Debug("first-superadmin promotion skipped: a superadmin already exists",
+			"user_id", uid, "role", role, "via", "oidc")
 	}
 	sessionToken, tokenHash := generateToken()
 	_ = s.store.CreateSession(r.Context(), storage.Session{

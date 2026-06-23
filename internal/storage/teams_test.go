@@ -28,6 +28,43 @@ func newTestStoreInternal(t *testing.T) *SQLiteStore {
 	return store
 }
 
+func TestSetUserRole(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	teamID, err := s.CreateTeam(ctx, Team{Name: "acme", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	uid, err := s.UpsertUser(ctx, User{Email: "u@acme.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("UpsertUser: %v", err)
+	}
+	if err := s.AssignUserToTeam(ctx, uid, teamID, "member"); err != nil {
+		t.Fatalf("AssignUserToTeam: %v", err)
+	}
+
+	if err := s.SetUserRole(ctx, uid, "admin"); err != nil {
+		t.Fatalf("SetUserRole: %v", err)
+	}
+
+	got, err := s.GetUserByID(ctx, uid)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if got.Role != "admin" {
+		t.Errorf("role = %q, want admin", got.Role)
+	}
+	if got.TeamID != teamID {
+		t.Errorf("team_id = %q, want %q (must be unchanged)", got.TeamID, teamID)
+	}
+
+	// Unknown user -> wrapped ErrNotFound.
+	if err := s.SetUserRole(ctx, "no-such-user", "admin"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetUserRole(unknown) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateAndGetTeam(t *testing.T) {
 	s := newTestStoreInternal(t)
 	ctx := context.Background()
@@ -850,5 +887,45 @@ func TestDeleteTeamCleansSettings(t *testing.T) {
 	}
 	if cnt2 != 0 {
 		t.Errorf("expected 0 settings rows after delete, got %d", cnt2)
+	}
+}
+
+func TestTeamMemberships(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+	tA, _ := s.CreateTeam(ctx, Team{Name: "A", Enabled: true})
+	tB, _ := s.CreateTeam(ctx, Team{Name: "B", Enabled: true})
+	uid, _ := s.UpsertUser(ctx, User{Email: "u@x.com", Role: "member", TeamID: tA})
+
+	// Home team counts as a membership even without a team_members row.
+	if ok, _ := s.IsTeamMember(ctx, uid, tA); !ok {
+		t.Fatal("home team should count as membership")
+	}
+	if ok, _ := s.IsTeamMember(ctx, uid, tB); ok {
+		t.Fatal("not a member of B yet")
+	}
+
+	if err := s.AddTeamMember(ctx, uid, tB); err != nil {
+		t.Fatalf("AddTeamMember: %v", err)
+	}
+	if ok, _ := s.IsTeamMember(ctx, uid, tB); !ok {
+		t.Fatal("should be a member of B after add")
+	}
+
+	teams, _ := s.ListUserTeams(ctx, uid)
+	if len(teams) != 2 {
+		t.Fatalf("want 2 teams (home + B), got %d", len(teams))
+	}
+
+	// Cannot remove the home team.
+	if err := s.RemoveTeamMember(ctx, uid, tA); err == nil {
+		t.Fatal("removing home team should error")
+	}
+	// Can remove an added team.
+	if err := s.RemoveTeamMember(ctx, uid, tB); err != nil {
+		t.Fatalf("RemoveTeamMember: %v", err)
+	}
+	if ok, _ := s.IsTeamMember(ctx, uid, tB); ok {
+		t.Fatal("should not be a member of B after remove")
 	}
 }

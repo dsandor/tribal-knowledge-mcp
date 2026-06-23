@@ -264,32 +264,49 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "bad_request", "invalid JSON body")
 		return
 	}
-	if !validAdminRole[body.Role] {
+	if body.Role == "superadmin" {
+		// Only a superadmin may grant the superadmin role. This is checked
+		// before the generic grant-guard below (which would otherwise reject
+		// even a superadmin, since rank(superadmin) >= rank(superadmin)).
+		if tc.Role != "superadmin" {
+			writeError(w, 403, "forbidden", "only a superadmin can grant the superadmin role")
+			return
+		}
+	} else if !validAdminRole[body.Role] {
 		writeError(w, 400, "bad_request", "invalid role: must be member, curator, or admin")
 		return
-	}
-	if adminRoleRank(body.Role) >= adminRoleRank(tc.Role) {
+	} else if adminRoleRank(body.Role) >= adminRoleRank(tc.Role) {
 		writeError(w, 403, "forbidden", "cannot grant a role equal to or higher than your own")
 		return
 	}
-	// Verify target user belongs to the caller's team (IDOR guard)
-	teamUsers, err := s.store.ListUsers(r.Context(), tc.TeamID)
-	if err != nil {
-		writeError(w, 500, "internal_error", fmt.Sprintf("list users: %v", err))
-		return
-	}
-	found := false
-	for _, u := range teamUsers {
-		if u.ID == targetID {
-			found = true
-			break
+	// Existence + scope check. A superadmin may set any user's role across
+	// teams; a non-superadmin admin is restricted to users in their active team.
+	if tc.Role == "superadmin" {
+		u, err := s.store.GetUserByID(r.Context(), targetID)
+		if err != nil || u == nil {
+			writeError(w, 404, "not_found", "user not found")
+			return
+		}
+	} else {
+		teamUsers, err := s.store.ListUsers(r.Context(), tc.TeamID)
+		if err != nil {
+			writeError(w, 500, "internal_error", fmt.Sprintf("list users: %v", err))
+			return
+		}
+		found := false
+		for _, u := range teamUsers {
+			if u.ID == targetID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, 404, "not_found", "user not found")
+			return
 		}
 	}
-	if !found {
-		writeError(w, 404, "not_found", "user not found")
-		return
-	}
-	if err := s.store.AssignUserToTeam(r.Context(), targetID, tc.TeamID, body.Role); err != nil {
+	// Apply the role only — never reassign or wipe the target's home team.
+	if err := s.store.SetUserRole(r.Context(), targetID, body.Role); err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("set role: %v", err))
 		return
 	}

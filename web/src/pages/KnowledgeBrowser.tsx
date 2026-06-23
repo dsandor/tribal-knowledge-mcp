@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type KnowledgeEntry } from '@/lib/api'
+import { api, copyKnowledge, getMe, getMyTeams, moveKnowledge, type KnowledgeEntry } from '@/lib/api'
 import { ChevronLeft, ChevronRight, Search, Tag } from 'lucide-react'
 import { TagPill } from '@/components/ui/tag-pill'
 import Alert from '@mui/material/Alert'
@@ -8,11 +8,22 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Card from '@mui/material/Card'
 import CardContent from '@mui/material/CardContent'
+import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
+import FormControl from '@mui/material/FormControl'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import FormGroup from '@mui/material/FormGroup'
 import IconButton from '@mui/material/IconButton'
+import InputLabel from '@mui/material/InputLabel'
 import MenuItem from '@mui/material/MenuItem'
+import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
+import Snackbar from '@mui/material/Snackbar'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import ToggleButton from '@mui/material/ToggleButton'
@@ -98,7 +109,19 @@ export default function KnowledgeBrowser() {
   const [searchMode, setSearchMode] = useState<SearchMode>('hybrid')
   const [tagFilter, setTagFilter] = useState('')
 
-  useEffect(() => {
+  // --- Superadmin bulk move/copy ---
+  const [isSuperadmin, setIsSuperadmin] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [teams, setTeams] = useState<{ id: string; name: string }[]>([])
+  const [moveOpen, setMoveOpen] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [moveTarget, setMoveTarget] = useState('')
+  const [copyTargets, setCopyTargets] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+
+  const fetchEntries = useCallback(() => {
     let ignore = false
     setLoading(true)
     setError(null)
@@ -109,6 +132,82 @@ export default function KnowledgeBrowser() {
       .finally(() => { if (!ignore) setLoading(false) })
     return () => { ignore = true }
   }, [page, search, domain, type, searchMode, tagFilter])
+
+  useEffect(() => fetchEntries(), [fetchEntries])
+
+  // Determine superadmin once; load teams lazily for the pickers.
+  useEffect(() => {
+    let ignore = false
+    getMe()
+      .then(me => {
+        if (ignore || me.role !== 'superadmin') return
+        setIsSuperadmin(true)
+        return getMyTeams().then(res => { if (!ignore) setTeams(res.teams ?? []) })
+      })
+      .catch(() => { /* non-superadmin or unauthenticated: leave page unchanged */ })
+    return () => { ignore = true }
+  }, [])
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const clearSelection = () => setSelected(new Set())
+
+  const selectedIds = Array.from(selected)
+
+  const handleMoveConfirm = async () => {
+    if (!moveTarget || selectedIds.length === 0) return
+    setBulkBusy(true)
+    setBulkError(null)
+    try {
+      await moveKnowledge(selectedIds, moveTarget)
+      const count = selectedIds.length
+      setMoveOpen(false)
+      setMoveTarget('')
+      clearSelection()
+      fetchEntries()
+      setToast(`Moved ${count} entr${count !== 1 ? 'ies' : 'y'}.`)
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Move failed.')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const handleCopyConfirm = async () => {
+    const targets = Array.from(copyTargets)
+    if (targets.length === 0 || selectedIds.length === 0) return
+    setBulkBusy(true)
+    setBulkError(null)
+    try {
+      await copyKnowledge(selectedIds, targets)
+      const count = selectedIds.length
+      setCopyOpen(false)
+      setCopyTargets(new Set())
+      clearSelection()
+      fetchEntries()
+      setToast(`Copied ${count} entr${count !== 1 ? 'ies' : 'y'} to ${targets.length} team${targets.length !== 1 ? 's' : ''}.`)
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Copy failed.')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const toggleCopyTarget = (id: string) => {
+    setCopyTargets(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const handleSearch = () => { setSearch(searchInput); setPage(0) }
 
@@ -189,6 +288,35 @@ export default function KnowledgeBrowser() {
         </Box>
       </Stack>
 
+      {isSuperadmin && selected.size > 0 && (
+        <Paper
+          variant="outlined"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
+            px: 2,
+            py: 1,
+            position: 'sticky',
+            top: 0,
+            zIndex: 2,
+            bgcolor: 'rgba(16, 185, 129, 0.12)',
+          }}
+        >
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {selected.size} selected
+          </Typography>
+          <Box sx={{ flex: 1 }} />
+          <Button size="small" variant="outlined" onClick={() => { setBulkError(null); setMoveTarget(''); setMoveOpen(true) }}>
+            Move to team…
+          </Button>
+          <Button size="small" variant="outlined" onClick={() => { setBulkError(null); setCopyTargets(new Set()); setCopyOpen(true) }}>
+            Copy to teams…
+          </Button>
+          <Button size="small" onClick={clearSelection}>Clear</Button>
+        </Paper>
+      )}
+
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress size={24} />
@@ -210,12 +338,14 @@ export default function KnowledgeBrowser() {
           )}
           {entries.map(e => {
             const snippet = getSnippet(e.Content ?? '', search)
-            return (
+            const card = (
               <Card
                 key={e.ID}
                 component={Link}
                 to={`/knowledge/${e.ID}`}
                 sx={{
+                  flex: 1,
+                  minWidth: 0,
                   textDecoration: 'none',
                   cursor: 'pointer',
                   '&:hover': { borderColor: 'primary.main' },
@@ -268,6 +398,18 @@ export default function KnowledgeBrowser() {
                 </CardContent>
               </Card>
             )
+            if (!isSuperadmin) return card
+            return (
+              <Box key={e.ID} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Checkbox
+                  checked={selected.has(e.ID)}
+                  onChange={() => toggleSelect(e.ID)}
+                  size="small"
+                  slotProps={{ input: { 'aria-label': `Select ${e.Title}` } }}
+                />
+                {card}
+              </Box>
+            )
           })}
         </Stack>
       )}
@@ -293,6 +435,74 @@ export default function KnowledgeBrowser() {
           Next
         </Button>
       </Box>
+
+      {/* Move to team dialog (single team) */}
+      <Dialog open={moveOpen} onClose={bulkBusy ? undefined : () => setMoveOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Move {selected.size} entr{selected.size !== 1 ? 'ies' : 'y'} to team</DialogTitle>
+        <DialogContent>
+          <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+            <InputLabel>Team</InputLabel>
+            <Select
+              label="Team"
+              value={moveTarget}
+              onChange={ev => setMoveTarget(ev.target.value)}
+              disabled={bulkBusy}
+            >
+              {teams.map(t => (
+                <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {bulkError && <Alert severity="error" sx={{ mt: 2 }}>{bulkError}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMoveOpen(false)} disabled={bulkBusy}>Cancel</Button>
+          <Button variant="contained" onClick={handleMoveConfirm} disabled={bulkBusy || !moveTarget}>
+            {bulkBusy ? 'Moving…' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Copy to teams dialog (multiple teams) */}
+      <Dialog open={copyOpen} onClose={bulkBusy ? undefined : () => setCopyOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Copy {selected.size} entr{selected.size !== 1 ? 'ies' : 'y'} to teams</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Copies appear as pending in each selected team.
+          </Typography>
+          <FormGroup>
+            {teams.map(t => (
+              <FormControlLabel
+                key={t.id}
+                control={
+                  <Checkbox
+                    checked={copyTargets.has(t.id)}
+                    onChange={() => toggleCopyTarget(t.id)}
+                    disabled={bulkBusy}
+                    size="small"
+                  />
+                }
+                label={t.name}
+              />
+            ))}
+          </FormGroup>
+          {bulkError && <Alert severity="error" sx={{ mt: 2 }}>{bulkError}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCopyOpen(false)} disabled={bulkBusy}>Cancel</Button>
+          <Button variant="contained" onClick={handleCopyConfirm} disabled={bulkBusy || copyTargets.size === 0}>
+            {bulkBusy ? 'Copying…' : 'Copy'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar
+        open={toast !== null}
+        autoHideDuration={3000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        message={toast ?? ''}
+      />
     </Stack>
   )
 }

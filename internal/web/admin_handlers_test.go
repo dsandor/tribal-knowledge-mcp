@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -254,5 +255,60 @@ func TestDeleteTeamMigrateUnknownSource404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// setRoleMockStore lets a test control the acting user's role (via GetAPIKeyByHash)
+// and the set of users on the team (via ListUsers) so the IDOR guard in
+// handleSetUserRole resolves the target user.
+type setRoleMockStore struct {
+	mockStore
+	actorRole string
+	teamUsers []storage.User
+}
+
+func (s *setRoleMockStore) GetAPIKeyByHash(_ context.Context, hash string) (*storage.APIKey, error) {
+	return &storage.APIKey{ID: "actor-key", TeamID: "team-1", Role: s.actorRole, KeyHash: hash}, nil
+}
+
+func (s *setRoleMockStore) ListUsers(_ context.Context, _ string) ([]storage.User, error) {
+	return s.teamUsers, nil
+}
+
+// TestSetUserRole_SuperadminGrant: only a superadmin may grant the superadmin role.
+func TestSetUserRole_SuperadminGrant(t *testing.T) {
+	cases := []struct {
+		name      string
+		actorRole string
+		wantCode  int
+	}{
+		{name: "superadmin grants superadmin -> success", actorRole: "superadmin", wantCode: http.StatusOK},
+		{name: "admin grants superadmin -> forbidden", actorRole: "admin", wantCode: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &setRoleMockStore{
+				actorRole: tc.actorRole,
+				// teamUsers (ListUsers) is empty so the target is NOT in the
+				// caller's active team. The superadmin path must resolve the
+				// target via GetUserByID, not ListUsers; an admin would 404.
+				teamUsers: nil,
+			}
+			// The target lives in a different team than the actor (team-1).
+			store.users = map[string]storage.User{
+				"target-user": {ID: "target-user", TeamID: "other-team", Role: "member"},
+			}
+			srv := newAdminTestServer(t, store)
+
+			req := httptest.NewRequest("PUT", "/api/users/target-user/role",
+				strings.NewReader(`{"role":"superadmin"}`))
+			req.Header.Set("Authorization", "Bearer actor-token")
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+
+			if w.Code != tc.wantCode {
+				t.Fatalf("want %d, got %d: %s", tc.wantCode, w.Code, w.Body.String())
+			}
+		})
 	}
 }

@@ -20,6 +20,8 @@ type TeamContext struct {
 	KeyType string // "team" | "user" — only set for API key requests
 	Role    string // member|curator|admin|superadmin
 	Display string // human-readable name: key.Name (bearer) or UserID (session)
+
+	ActiveTeamExplicit bool // an X-Team-Id override was applied this request
 }
 
 // EffectiveActorID returns a stable per-caller identity for personal features
@@ -34,6 +36,69 @@ func (tc TeamContext) EffectiveActorID() string {
 		return tc.KeyID
 	}
 	return "local"
+}
+
+// ListScopeTeamID returns the team id to use when scoping list/count/search
+// reads. An explicit X-Team-Id override pins reads to that team (even for
+// superadmins); otherwise superadmins see all teams (empty filter) and everyone
+// else is scoped to their resolved team.
+func (tc TeamContext) ListScopeTeamID() string {
+	if tc.ActiveTeamExplicit {
+		return tc.TeamID
+	}
+	if tc.Role == "superadmin" {
+		return ""
+	}
+	return tc.TeamID
+}
+
+// WriteTargetTeamID returns the team a new record should be written to. Prefers
+// an explicit active team, then the resolved team, then the user's home team.
+// homeTeamID is the caller's users.team_id (pass "" if unknown / not a user).
+func (tc TeamContext) WriteTargetTeamID(homeTeamID string) string {
+	if tc.TeamID != "" {
+		return tc.TeamID
+	}
+	return homeTeamID
+}
+
+// MembershipStore is the minimal lookup ActiveTeamMiddleware needs.
+type MembershipStore interface {
+	IsTeamMember(ctx context.Context, userID, teamID string) (bool, error)
+}
+
+// ActiveTeamMiddleware honors an X-Team-Id header to pin the request to another
+// team. Must run AFTER RequireAuth. superadmin may pin to any team; a user
+// identity may pin to any team they belong to; a plain team key may only pin to
+// its own team. Invalid/forbidden overrides return 403.
+func ActiveTeamMiddleware(store MembershipStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			target := strings.TrimSpace(r.Header.Get("X-Team-Id"))
+			if target == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			tc := GetTeamContext(r.Context())
+			allowed := false
+			switch {
+			case tc.Role == "superadmin":
+				allowed = true
+			case tc.UserID != "":
+				ok, err := store.IsTeamMember(r.Context(), tc.UserID, target)
+				allowed = err == nil && ok
+			default: // plain team key
+				allowed = target == tc.TeamID
+			}
+			if !allowed {
+				writeForbidden(w)
+				return
+			}
+			tc.TeamID = target
+			tc.ActiveTeamExplicit = true
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, tc)))
+		})
+	}
 }
 
 // PresenceToucher is an optional hook called on every successful authentication

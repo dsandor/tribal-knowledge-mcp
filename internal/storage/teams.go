@@ -149,6 +149,9 @@ type TeamStore interface {
 	GetUserByExternalID(ctx context.Context, externalID string) (*User, error)
 	ListUsers(ctx context.Context, teamID string) ([]User, error)
 	AssignUserToTeam(ctx context.Context, userID, teamID, role string) error
+	// SetUserRole updates only the user's role, leaving their home team
+	// (team_id) untouched. Returns a wrapped ErrNotFound if no such user.
+	SetUserRole(ctx context.Context, userID, role string) error
 	// AutoAssignUserToTeam assigns a user to a team without marking the
 	// assignment as manual, and only if the user has not been manually
 	// assigned by an admin. Used by the OIDC login flow for whitelist-based
@@ -157,6 +160,12 @@ type TeamStore interface {
 	// ResolveTeamByEmail returns the first enabled team whose domain_patterns
 	// contains a regex matching email; returns nil (no error) if none match.
 	ResolveTeamByEmail(ctx context.Context, email string) (*Team, error)
+	// Team memberships (multi-team). The user's home team (users.team_id) is an
+	// implicit membership and cannot be removed via RemoveTeamMember.
+	AddTeamMember(ctx context.Context, userID, teamID string) error
+	RemoveTeamMember(ctx context.Context, userID, teamID string) error
+	ListUserTeams(ctx context.Context, userID string) ([]Team, error)
+	IsTeamMember(ctx context.Context, userID, teamID string) (bool, error)
 	// ClaimFirstSuperadmin promotes userID to superadmin iff no superadmin user
 	// currently exists, so the first user to sign in on a fresh deployment owns
 	// it. Atomic and idempotent; returns true only when it performed the

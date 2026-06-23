@@ -35,15 +35,21 @@ func CreateShare(ctx context.Context, store storage.Store, entryID, sourceTeamID
 // Import copies the entry behind shareID into destTeamID as a new, pending,
 // re-embedded entry and burns the single-use token. It returns the new entry id.
 //
-// Ordering: we MarkShareUsed FIRST (as an atomic claim) and only then store the
-// copy. MarkShareUsed errors if the token is already used or revoked, so this
-// makes single-use enforcement race-free at the storage layer — two concurrent
-// imports cannot both pass the claim. The trade-off is that if the subsequent
-// store fails the token is already burned (a "lost" share). We deliberately
-// prefer burning a share over the alternative (store-first) risk of two callers
-// both creating duplicate copies from one token. Marking before we know the new
-// entry id means we pass an empty importedEntryID; storage records used_at/used_by
-// which is sufficient to enforce single-use.
+// Ordering: after share validation we run a pre-flight that resolves the
+// destination team's embedder. A misconfigured destination (no embedder) is a
+// fail-fast condition that returns BEFORE MarkShareUsed, so the single-use token
+// is NOT burned — the share stays importable once an embedder is configured.
+//
+// Only after the pre-flight passes do we MarkShareUsed FIRST (as an atomic
+// claim) and then store the copy. MarkShareUsed errors if the token is already
+// used or revoked, so this makes single-use enforcement race-free at the storage
+// layer — two concurrent imports cannot both pass the claim. The trade-off is
+// that if the subsequent store fails the token is already burned (a "lost"
+// share). We deliberately prefer burning a share over the alternative
+// (store-first) risk of two callers both creating duplicate copies from one
+// token. Marking before we know the new entry id means we pass an empty
+// importedEntryID; storage records used_at/used_by which is sufficient to
+// enforce single-use.
 func Import(ctx context.Context, store storage.Store, src *aiconfig.Sources, shareID, destTeamID, destUserID string) (string, error) {
 	share, err := store.GetShare(ctx, shareID)
 	if err != nil {
@@ -59,7 +65,39 @@ func Import(ctx context.Context, store storage.Store, src *aiconfig.Sources, sha
 		return "", ErrSameTeam
 	}
 
-	srcEntry, err := store.GetEntry(ctx, share.EntryID)
+	// Pre-flight: resolve the destination team's embedder BEFORE burning the
+	// token. CopyEntryToTeam resolves the embedder again and errors with this
+	// same message if it is nil; doing it here first means a misconfigured
+	// destination does not consume the single-use share. We mirror the exact
+	// error CopyEntryToTeam returns so callers see a consistent message.
+	if src.Embedder(ctx, destTeamID) == nil {
+		return "", fmt.Errorf("embedding not configured for your team")
+	}
+
+	// Claim the token first (single-use enforcement). See ordering note above.
+	if err := store.MarkShareUsed(ctx, shareID, destUserID, ""); err != nil {
+		return "", fmt.Errorf("share is no longer available: %w", err)
+	}
+
+	newID, err := CopyEntryToTeam(ctx, store, src, share.EntryID, destTeamID, "")
+	if err != nil {
+		return "", err
+	}
+	return newID, nil
+}
+
+// CopyEntryToTeam duplicates entryID into destTeamID as a new, pending,
+// re-embedded entry and returns the new entry id. Unlike Import it involves no
+// share token — it is the token-free copy core shared by Import and the
+// superadmin "copy knowledge into teams" flow.
+//
+// The new entry preserves the original's content, metadata, and author
+// (provenance) but is given a fresh UUID by the storage layer and lands as
+// "pending" so the destination team can review it. The createdBy argument
+// records who initiated the copy; it is currently informational and does not
+// override the preserved author.
+func CopyEntryToTeam(ctx context.Context, store storage.Store, src *aiconfig.Sources, entryID, destTeamID, createdBy string) (string, error) {
+	srcEntry, err := store.GetEntry(ctx, entryID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return "", fmt.Errorf("shared entry no longer exists")
@@ -70,16 +108,10 @@ func Import(ctx context.Context, store storage.Store, src *aiconfig.Sources, sha
 		return "", fmt.Errorf("shared entry no longer exists")
 	}
 
-	// Resolve the destination team's embedder before claiming the token so an
-	// unconfigured team fails fast without burning the share.
+	// Resolve the destination team's embedder.
 	embedder := src.Embedder(ctx, destTeamID)
 	if embedder == nil {
 		return "", fmt.Errorf("embedding not configured for your team")
-	}
-
-	// Claim the token first (single-use enforcement). See ordering note above.
-	if err := store.MarkShareUsed(ctx, shareID, destUserID, ""); err != nil {
-		return "", fmt.Errorf("share is no longer available: %w", err)
 	}
 
 	// Build the destination copy. Do NOT carry the source ID — StoreEntryChunked

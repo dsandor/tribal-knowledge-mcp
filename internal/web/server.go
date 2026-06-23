@@ -205,7 +205,9 @@ func (s *Server) routes() {
 	// Member routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Get("/api/me", s.handleMe)
+		r.Get("/api/me/teams", s.handleMyTeams)
 		r.Get("/api/stats", s.handleStats)
 		r.Get("/api/knowledge", s.handleKnowledgeList)
 		r.Get("/api/knowledge/export", s.handleKnowledgeExport)
@@ -245,6 +247,7 @@ func (s *Server) routes() {
 	// Curator routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Use(auth.RequireCurator())
 		r.Put("/api/knowledge/{id}/approve", s.handleKnowledgeApprove)
 		r.Put("/api/knowledge/{id}/reject", s.handleKnowledgeReject)
@@ -258,6 +261,7 @@ func (s *Server) routes() {
 	// Admin routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Use(auth.RequireAdmin())
 		r.Post("/api/pipeline/trigger", s.handlePipelineTrigger)
 		r.Get("/api/pipeline/runs", s.handleListPipelineRuns)
@@ -267,6 +271,9 @@ func (s *Server) routes() {
 		r.Get("/api/users", s.handleListUsers)
 		r.Post("/api/users", s.handleAssignUser)
 		r.Put("/api/users/{id}/role", s.handleSetUserRole)
+		r.Get("/api/admin/users/{id}/teams", s.handleListUserTeams)
+		r.Post("/api/admin/users/{id}/teams", s.handleAddMembership)
+		r.Delete("/api/admin/users/{id}/teams/{teamId}", s.handleRemoveMembership)
 		r.Get("/api/settings", s.handleGetSettings)
 		r.Put("/api/settings", s.handlePutSettings)
 		r.Get("/api/settings/models", s.handleGetModels)
@@ -276,6 +283,7 @@ func (s *Server) routes() {
 	// Superadmin routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Use(auth.RequireSuperadmin())
 		r.Get("/api/admin/teams", s.handleListTeams)
 		r.Post("/api/admin/teams", s.handleCreateTeam)
@@ -289,6 +297,8 @@ func (s *Server) routes() {
 		r.Put("/api/admin/auth-config", s.handlePutAuthConfig)
 		r.Get("/api/admin/backup", s.handleBackupDownload)
 		r.Post("/api/admin/restore", s.handleRestoreUpload)
+		r.Post("/api/admin/knowledge/move", s.handleMoveKnowledge)
+		r.Post("/api/admin/knowledge/copy", s.handleCopyKnowledge)
 	})
 
 	// SPA fallback

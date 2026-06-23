@@ -17,7 +17,95 @@ import TableContainer from '@mui/material/TableContainer';
 import Paper from '@mui/material/Paper';
 import Chip from '@mui/material/Chip';
 import Alert from '@mui/material/Alert';
-import { listUsers, addUser, setUserRole, type TeamUser } from '../lib/api';
+import Checkbox from '@mui/material/Checkbox';
+import FormGroup from '@mui/material/FormGroup';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import {
+  listUsers,
+  addUser,
+  setUserRole,
+  getMe,
+  getMyTeams,
+  getUserTeams,
+  addMembership,
+  removeMembership,
+  type TeamUser,
+} from '../lib/api';
+
+interface TeamRef {
+  id: string;
+  name: string;
+}
+
+// Membership editor: shows the user's current teams (checked) against the set
+// of teams the viewer may assign (superadmin -> all, admin -> own teams).
+// Toggling adds/removes a membership and refreshes from the server. The home
+// team cannot be removed; the backend rejects it and we surface the message.
+function TeamMembershipEditor({ userId, selectableTeams }: { userId: string; selectableTeams: TeamRef[] }) {
+  const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () => {
+    return getUserTeams(userId)
+      .then(res => setMemberIds(new Set(res.teams.map(t => t.id))))
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load teams'));
+  };
+
+  useEffect(() => {
+    refresh().finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const handleToggle = async (teamId: string, checked: boolean) => {
+    setError(null);
+    setBusy(teamId);
+    try {
+      if (checked) await addMembership(userId, teamId);
+      else await removeMembership(userId, teamId);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update membership');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (loading) return <CircularProgress size={16} />;
+
+  return (
+    <Box>
+      <FormGroup sx={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+        {selectableTeams.map(team => {
+          const isMember = memberIds.has(team.id);
+          return (
+            <FormControlLabel
+              key={team.id}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={isMember}
+                  disabled={busy !== null}
+                  onChange={e => handleToggle(team.id, e.target.checked)}
+                />
+              }
+              label={<Typography variant="body2">{team.name}</Typography>}
+            />
+          );
+        })}
+      </FormGroup>
+      {selectableTeams.length === 0 && (
+        <Typography variant="caption" color="text.secondary">No assignable teams.</Typography>
+      )}
+      {error && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+          {error}
+        </Typography>
+      )}
+    </Box>
+  );
+}
 
 const ROLES = ['member', 'curator', 'admin'] as const;
 
@@ -90,12 +178,28 @@ export default function Users() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [roleErrors, setRoleErrors] = useState<Record<string, string>>({});
+  const [myRole, setMyRole] = useState<string>('');
+  const [selectableTeams, setSelectableTeams] = useState<TeamRef[]>([]);
 
   useEffect(() => {
     listUsers()
       .then(setUsers)
       .catch(e => setLoadError(e instanceof Error ? e.message : 'Failed to load users'))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    getMe()
+      .then(me => setMyRole(me.role))
+      .catch(() => setMyRole(''));
+  }, []);
+
+  // getMyTeams returns all teams for a superadmin and the admin's own teams
+  // for an admin — exactly the set of teams this viewer may assign.
+  useEffect(() => {
+    getMyTeams()
+      .then(res => setSelectableTeams(res.teams))
+      .catch(() => setSelectableTeams([]));
   }, []);
 
   const handleAdded = (user: TeamUser) => {
@@ -161,6 +265,7 @@ export default function Users() {
                 <TableCell>Email</TableCell>
                 <TableCell>Name</TableCell>
                 <TableCell>Role</TableCell>
+                <TableCell>Teams</TableCell>
                 <TableCell />
               </TableRow>
             </TableHead>
@@ -170,6 +275,9 @@ export default function Users() {
                   <TableCell>{user.email}</TableCell>
                   <TableCell sx={{ color: 'text.secondary' }}>{user.name || '—'}</TableCell>
                   <TableCell><RoleBadge role={user.role} /></TableCell>
+                  <TableCell>
+                    <TeamMembershipEditor userId={user.id} selectableTeams={selectableTeams} />
+                  </TableCell>
                   <TableCell align="right">
                     <FormControl size="small" sx={{ minWidth: 120 }}>
                       <Select
@@ -180,6 +288,7 @@ export default function Users() {
                         sx={{ fontSize: 13 }}
                       >
                         {ROLES.map(r => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{r}</MenuItem>)}
+                        {myRole === 'superadmin' && <MenuItem value="superadmin" sx={{ fontSize: 13 }}>superadmin</MenuItem>}
                       </Select>
                     </FormControl>
                     {roleErrors[user.id] && (

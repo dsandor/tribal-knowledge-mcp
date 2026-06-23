@@ -41,6 +41,15 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 			)`},
 		{"users_email_uq", `CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users(email) WHERE email <> ''`},
 		{"users_ext_id_uq", `CREATE UNIQUE INDEX IF NOT EXISTS users_ext_id_uq ON users(external_id) WHERE external_id <> ''`},
+		{"team_members", `CREATE TABLE IF NOT EXISTS team_members (
+				user_id    TEXT NOT NULL,
+				team_id    TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+				PRIMARY KEY (user_id, team_id)
+			)`},
+		{"team_members_backfill", `INSERT INTO team_members (user_id, team_id)
+				SELECT id, team_id FROM users WHERE team_id <> ''
+				ON CONFLICT DO NOTHING`},
 		{"sessions", `
 			CREATE TABLE IF NOT EXISTS sessions (
 				id          TEXT PRIMARY KEY,
@@ -504,6 +513,21 @@ func (s *PostgresStore) ClaimFirstSuperadmin(ctx context.Context, userID string)
 	return n > 0, nil
 }
 
+func (s *PostgresStore) SetUserRole(ctx context.Context, userID, role string) error {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE users SET role = $1 WHERE id = $2",
+		role, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("set user role: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %q: %w", userID, ErrNotFound)
+	}
+	return nil
+}
+
 func (s *PostgresStore) AutoAssignUserToTeam(ctx context.Context, userID, teamID, role string) error {
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE users SET team_id = $1, role = $2 WHERE id = $3 AND manually_assigned = FALSE",
@@ -537,6 +561,73 @@ func (s *PostgresStore) ResolveTeamByEmail(ctx context.Context, email string) (*
 		}
 	}
 	return nil, nil
+}
+
+// ── Team memberships ──────────────────────────────────────────────────────────
+
+func (s *PostgresStore) AddTeamMember(ctx context.Context, userID, teamID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO team_members (user_id, team_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		userID, teamID)
+	if err != nil {
+		return fmt.Errorf("add team member: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) RemoveTeamMember(ctx context.Context, userID, teamID string) error {
+	u, err := s.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.TeamID == teamID {
+		return fmt.Errorf("cannot remove home team membership: %w", ErrInvalid)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`DELETE FROM team_members WHERE user_id = $1 AND team_id = $2`, userID, teamID)
+	if err != nil {
+		return fmt.Errorf("remove team member: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) IsTeamMember(ctx context.Context, userID, teamID string) (bool, error) {
+	u, err := s.GetUserByID(ctx, userID)
+	if err == nil && u.TeamID == teamID && teamID != "" {
+		return true, nil
+	}
+	var one int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM team_members WHERE user_id = $1 AND team_id = $2`, userID, teamID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("is team member: %w", err)
+	}
+	return true, nil
+}
+
+func (s *PostgresStore) ListUserTeams(ctx context.Context, userID string) ([]Team, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT t.id, t.name, t.enabled
+		FROM teams t
+		WHERE t.id = (SELECT team_id FROM users WHERE id = $1)
+		   OR t.id IN (SELECT team_id FROM team_members WHERE user_id = $2)
+		ORDER BY t.name`, userID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user teams: %w", err)
+	}
+	defer rows.Close()
+	var out []Team
+	for rows.Next() {
+		var t Team
+		if err := rows.Scan(&t.ID, &t.Name, &t.Enabled); err != nil {
+			return nil, fmt.Errorf("scan user team: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // ── API Keys ──────────────────────────────────────────────────────────────────

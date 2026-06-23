@@ -125,6 +125,9 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 	return nil, nil
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
+func (m *mockStore) ReassignEntriesTeam(_ context.Context, _ []string, _ string) error {
+	return nil
+}
 func (m *mockStore) AddVisibilityRule(_ context.Context, userID, ruleType, value string) (storage.VisibilityRule, error) {
 	if m.visRules == nil {
 		m.visRules = map[string][]storage.VisibilityRule{}

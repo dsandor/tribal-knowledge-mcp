@@ -79,7 +79,24 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 
 		// Resolve actor/team once; reused for the entry literal, embedder call,
 		// and the live event so we never call resolveActorTeam twice.
-		teamID, actor := resolveActorTeam(ctx)
+		_, actor := resolveActorTeam(ctx)
+
+		// Resolve the team this entry should land in. A superadmin in see-all
+		// mode (empty tc.TeamID) falls back to their home team rather than
+		// writing a team-less record. With no user/home (stdio), this stays
+		// empty — preserving stdio behavior.
+		tc := auth.GetTeamContext(ctx)
+		home := ""
+		if tc.UserID != "" {
+			if us, ok := store.(interface {
+				GetUserByID(context.Context, string) (*storage.User, error)
+			}); ok {
+				if u, err := us.GetUserByID(ctx, tc.UserID); err == nil {
+					home = u.TeamID
+				}
+			}
+		}
+		teamID := tc.WriteTargetTeamID(home)
 
 		entry := storage.KnowledgeEntry{
 			Type:        storage.KnowledgeType(entryType),
@@ -191,7 +208,8 @@ func HandleKnowledgeGet(store storage.Store) func(context.Context, mcplib.CallTo
 
 func HandleKnowledgeList(store storage.Store) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		teamID, _ := resolveActorTeam(ctx)
+		// List reads are scoped to the caller's team; superadmins see all teams.
+		teamID := auth.GetTeamContext(ctx).ListScopeTeamID()
 		filter := storage.ListFilter{
 			Domain: req.GetString("domain", ""),
 			Type:   storage.KnowledgeType(req.GetString("type", "")),

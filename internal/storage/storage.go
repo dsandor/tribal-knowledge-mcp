@@ -24,6 +24,10 @@ var ErrNotFound = errors.New("entry not found")
 // ErrBadTarget is returned by DeleteTeamMigrate when the target team does not exist.
 var ErrBadTarget = errors.New("target team not found")
 
+// ErrInvalid is returned when an operation is rejected due to an invalid argument
+// or state (e.g. attempting to remove a user's implicit home-team membership).
+var ErrInvalid = errors.New("invalid argument")
+
 type KnowledgeEntry struct {
 	ID          string
 	Type        KnowledgeType
@@ -235,6 +239,10 @@ type Store interface {
 	// entries, clusters, agents, agent_versions, dataset_snapshots, and
 	// pipeline_runs. Idempotent; used by single-team deployments at startup.
 	BackfillTeamID(ctx context.Context, teamID string) error
+	// ReassignEntriesTeam transactionally moves the given entries to teamID by
+	// updating entries.team_id for each id. Returns an error if any update fails
+	// (the whole batch is rolled back).
+	ReassignEntriesTeam(ctx context.Context, entryIDs []string, teamID string) error
 	// Ping verifies the storage connection is alive. Returns nil on success.
 	Ping(ctx context.Context) error
 	Close() error

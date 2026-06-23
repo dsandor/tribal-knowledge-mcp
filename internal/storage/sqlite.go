@@ -314,11 +314,25 @@ func (s *SQLiteStore) migrate() error {
 			entity_id   TEXT NOT NULL DEFAULT '',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS team_members (
+			user_id    TEXT NOT NULL,
+			team_id    TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (user_id, team_id)
+		)`,
 	}
 	for _, stmt := range phase5Tables {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("phase5 create table: %w", err)
 		}
+	}
+
+	// Backfill each existing user's home team as a membership row (idempotent).
+	if _, err := s.db.Exec(`
+		INSERT OR IGNORE INTO team_members (user_id, team_id)
+		SELECT id, team_id FROM users WHERE team_id IS NOT NULL AND team_id <> ''
+	`); err != nil {
+		return fmt.Errorf("phase5 backfill team_members: %w", err)
 	}
 
 	// Idempotent ALTER TABLE for existing tables — ignore "duplicate column name" errors.
@@ -855,6 +869,25 @@ func (s *SQLiteStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) err
 		return fmt.Errorf("entry %q: %w", entry.ID, ErrNotFound)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) ReassignEntriesTeam(ctx context.Context, entryIDs []string, teamID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	stmt, err := tx.PrepareContext(ctx, `UPDATE entries SET team_id = ? WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range entryIDs {
+		if _, err := stmt.ExecContext(ctx, teamID, id); err != nil {
+			return fmt.Errorf("reassign entry %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {

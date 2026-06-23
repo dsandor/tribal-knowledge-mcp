@@ -3,11 +3,13 @@ const BASE = '/api'
 // Central fetch wrapper — injects Authorization header and redirects to /login on 401.
 async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const key = localStorage.getItem('tkm_api_key')
+  const activeTeam = localStorage.getItem('tkm_active_team')
   const r = await fetch(url, {
     ...init,
     headers: {
       ...(init.headers as Record<string, string> ?? {}),
       ...(key ? { 'Authorization': `Bearer ${key}` } : {}),
+      ...(activeTeam ? { 'X-Team-Id': activeTeam } : {}),
     },
   })
   if (r.status === 401) {
@@ -322,6 +324,84 @@ export async function checkAuth(): Promise<boolean> {
     headers: key ? { Authorization: `Bearer ${key}` } : {},
   });
   return r.ok;
+}
+
+// Current authenticated user (from session cookie or Bearer key).
+export async function getMe(): Promise<{ user_id: string; team_id: string; role: string; display: string }> {
+  const r = await apiFetch('/api/me');
+  if (!r.ok) throw new Error('fetch me failed');
+  return r.json();
+}
+
+// --- Active team (multi-team membership) ---
+// The teams the current user belongs to, plus the server's notion of the active team.
+export async function getMyTeams(): Promise<{ teams: { id: string; name: string }[]; active_team: string }> {
+  const r = await apiFetch('/api/me/teams');
+  if (!r.ok) throw new Error('fetch my teams failed');
+  return r.json();
+}
+
+// Persist the client-side active team. Pass null to clear (default = home team / see-all).
+export function setActiveTeam(id: string | null): void {
+  if (id) localStorage.setItem('tkm_active_team', id);
+  else localStorage.removeItem('tkm_active_team');
+}
+
+// Read the client-side active team, or null when unset.
+export function getActiveTeam(): string | null {
+  return localStorage.getItem('tkm_active_team');
+}
+
+// --- Admin: memberships & knowledge moves ---
+// The teams a specific user belongs to (home team + memberships).
+export async function getUserTeams(userId: string): Promise<{ teams: { id: string; name: string }[] }> {
+  const r = await apiFetch(`/api/admin/users/${userId}/teams`);
+  if (!r.ok) throw new Error('fetch user teams failed');
+  return r.json();
+}
+
+export async function addMembership(userId: string, teamId: string): Promise<void> {
+  const r = await apiFetch(`/api/admin/users/${userId}/teams`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ team_id: teamId }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'add membership failed');
+  }
+}
+
+export async function removeMembership(userId: string, teamId: string): Promise<void> {
+  const r = await apiFetch(`/api/admin/users/${userId}/teams/${teamId}`, { method: 'DELETE' });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'remove membership failed');
+  }
+}
+
+export async function moveKnowledge(entryIds: string[], teamId: string): Promise<void> {
+  const r = await apiFetch('/api/admin/knowledge/move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry_ids: entryIds, team_id: teamId }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'move knowledge failed');
+  }
+}
+
+export async function copyKnowledge(entryIds: string[], teamIds: string[]): Promise<void> {
+  const r = await apiFetch('/api/admin/knowledge/copy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry_ids: entryIds, team_ids: teamIds }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'copy knowledge failed');
+  }
 }
 
 export async function login(email: string, password: string) {
