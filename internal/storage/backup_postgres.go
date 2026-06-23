@@ -68,11 +68,23 @@ func (s *PostgresStore) LoadTable(ctx context.Context, table string, rows []map[
 	if err != nil {
 		return err
 	}
+	// SQLite allows NULL in columns that are NOT NULL in the Postgres schema
+	// (e.g. api_keys.team_id / user_id are nullable in SQLite but NOT NULL DEFAULT
+	// '' in Postgres — superadmin keys carry NULL there). A NULL dumped from SQLite
+	// would violate the Postgres constraint, so introspect the target's NOT NULL
+	// columns and coerce any NULL value to that column's typed zero ('' / 0 /
+	// false). This normalizes SQLite's NULL to the canonical empty value the Go
+	// model already uses (empty string = "no team").
+	notNullCols, err := s.notNullColumns(ctx, table)
+	if err != nil {
+		return err
+	}
 	// json_populate_record coerces every column to the table's real types
 	// (text->timestamptz, number->integer, etc.) using Postgres input functions.
 	stmt := fmt.Sprintf("INSERT INTO %s SELECT * FROM json_populate_record(NULL::%s, $1::json)", table, table) //nolint:gosec // table allowlisted
 	for _, r := range rows {
 		coerceBooleanColumns(r, boolCols)
+		coerceNotNullColumns(r, notNullCols)
 		b, err := json.Marshal(r)
 		if err != nil {
 			return fmt.Errorf("marshal row for %s: %w", table, err)
@@ -170,6 +182,50 @@ func (s *PostgresStore) booleanColumns(ctx context.Context, table string) (map[s
 		out[c] = true
 	}
 	return out, rows.Err()
+}
+
+// notNullColumns returns each NOT NULL column of table mapped to its SQL
+// data_type (as reported by information_schema), via introspection.
+func (s *PostgresStore) notNullColumns(ctx context.Context, table string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT column_name, data_type FROM information_schema.columns
+		 WHERE table_name = $1 AND is_nullable = 'NO'`, table)
+	if err != nil {
+		return nil, fmt.Errorf("introspect not-null columns for %s: %w", table, err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, dtype string
+		if err := rows.Scan(&name, &dtype); err != nil {
+			return nil, err
+		}
+		out[name] = dtype
+	}
+	return out, rows.Err()
+}
+
+// coerceNotNullColumns replaces a NULL (or missing) value in any NOT NULL column
+// with that column's typed zero value, so a cross-engine restore (SQLite NULL ->
+// Postgres NOT NULL) does not violate the constraint. Mutates row in place.
+// Unknown/unhandled types are left untouched (they are expected to always carry
+// a value in a dump).
+func coerceNotNullColumns(row map[string]any, notNullCols map[string]string) {
+	for col, dtype := range notNullCols {
+		if v, ok := row[col]; ok && v != nil {
+			continue // already has a concrete value
+		}
+		switch dtype {
+		case "text", "character varying", "character", "uuid", "name", "citext":
+			row[col] = ""
+		case "integer", "bigint", "smallint", "numeric", "real", "double precision":
+			row[col] = 0
+		case "boolean":
+			row[col] = false
+			// Other types (timestamps, json/jsonb, etc.) always carry a value in a
+			// dump for NOT NULL columns, so they are intentionally left alone.
+		}
+	}
 }
 
 // coerceBooleanColumns rewrites numeric 0/1 values to bool for the named
