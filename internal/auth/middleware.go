@@ -22,6 +22,20 @@ type TeamContext struct {
 	Display string // human-readable name: key.Name (bearer) or UserID (session)
 }
 
+// EffectiveActorID returns a stable per-caller identity for personal features
+// (e.g. visibility rules). Prefers the user id, then the API key id, then the
+// constant "local" for dev-bypass / no-auth single-operator setups. Always
+// returns a non-empty string.
+func (tc TeamContext) EffectiveActorID() string {
+	if tc.UserID != "" {
+		return tc.UserID
+	}
+	if tc.KeyID != "" {
+		return tc.KeyID
+	}
+	return "local"
+}
+
 // PresenceToucher is an optional hook called on every successful authentication
 // so the caller can track online presence without introducing an import cycle
 // between internal/auth and internal/live.

@@ -144,22 +144,47 @@ func TestVisibilityHandlers_RejectsBadRuleType(t *testing.T) {
 	}
 }
 
-// TestVisibilityHandlers_RequiresUser ensures a request without a user identity
-// (team-scoped API key) is rejected.
-func TestVisibilityHandlers_RequiresUser(t *testing.T) {
-	store := &visStore{} // apiKeyUserID empty → no user identity
+// TestVisibilityHandlers_TeamKeyFallbackIdentity ensures a request without a
+// user identity (team-scoped API key) still works: it operates under the
+// effective actor identity (the API key id), so it can add a rule and list it
+// back rather than being rejected with a 400.
+func TestVisibilityHandlers_TeamKeyFallbackIdentity(t *testing.T) {
+	store := &visStore{} // apiKeyUserID empty → falls back to key id "test-key"
 	srv := newVisServer(t, store)
 
-	for _, method := range []string{"GET", "POST", "DELETE"} {
-		body := ""
-		if method != "GET" {
-			body = `{"rule_type":"author","value":"carol"}`
-		}
-		req := authRequest(method, "/api/visibility", body)
-		w := httptest.NewRecorder()
-		srv.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("%s without user: want 400, got %d: %s", method, w.Code, w.Body.String())
-		}
+	// POST succeeds under the fallback identity.
+	req := authRequest("POST", "/api/visibility", `{"rule_type":"author","value":"carol"}`)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The rule was stored under the key id (the EffectiveActorID fallback).
+	if len(store.rules) != 1 || store.rules[0].UserID != "test-key" {
+		t.Fatalf("rule should be stored under fallback key id, got %+v", store.rules)
+	}
+
+	// GET lists it back for the same caller.
+	req = authRequest("GET", "/api/visibility", "")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	rules := decodeVisRules(t, w)
+	if len(rules) != 1 || rules[0]["rule_type"] != "author" || rules[0]["value"] != "carol" {
+		t.Fatalf("GET unexpected rules: %v", rules)
+	}
+
+	// DELETE removes it.
+	req = authRequest("DELETE", "/api/visibility", `{"rule_type":"author","value":"carol"}`)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE want 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(store.rules) != 0 {
+		t.Fatalf("expected no rules after delete, got %+v", store.rules)
 	}
 }

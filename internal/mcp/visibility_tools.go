@@ -11,19 +11,12 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// errNoUserScope is the tool error returned when a visibility-management tool is
-// invoked without a user-scoped caller identity (team token / stdio). All of
-// these tools mutate or read the CALLER's own per-user suppression rules, which
-// is meaningless without a user id.
-func errNoUserScope() *mcplib.CallToolResult {
-	return mcplib.NewToolResultError("knowledge visibility requires a user-scoped token (no user identity on this token)")
-}
-
-// callerUserID resolves the calling user's id from ctx. ok is false (and the
-// caller should return errNoUserScope) when the token is not user-scoped.
-func callerUserID(ctx context.Context) (userID string, ok bool) {
-	uid := auth.GetTeamContext(ctx).UserID
-	return uid, uid != ""
+// callerActorID resolves the calling caller's stable effective identity (user
+// id, else API key id, else "local"). It always returns a non-empty id, so the
+// visibility-management tools work for team tokens, stdio and dev/no-auth
+// setups — each operates on that identity's own per-caller suppression rules.
+func callerActorID(ctx context.Context) string {
+	return auth.GetTeamContext(ctx).EffectiveActorID()
 }
 
 // validMuteKind reports whether kind is a valid rule type for mute/unmute.
@@ -81,10 +74,7 @@ func RegisterVisibilityTools(s *server.MCPServer, store storage.Store) {
 // HandleKnowledgeHide adds an "item" suppression rule for the calling user.
 func HandleKnowledgeHide(store storage.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		userID, ok := callerUserID(ctx)
-		if !ok {
-			return errNoUserScope(), nil
-		}
+		userID := callerActorID(ctx)
 		entryID := req.GetString("entry_id", "")
 		if entryID == "" {
 			return mcplib.NewToolResultError("entry_id is required"), nil
@@ -99,10 +89,7 @@ func HandleKnowledgeHide(store storage.Store) server.ToolHandlerFunc {
 // HandleKnowledgeUnhide deletes the "item" suppression rule for the calling user.
 func HandleKnowledgeUnhide(store storage.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		userID, ok := callerUserID(ctx)
-		if !ok {
-			return errNoUserScope(), nil
-		}
+		userID := callerActorID(ctx)
 		entryID := req.GetString("entry_id", "")
 		if entryID == "" {
 			return mcplib.NewToolResultError("entry_id is required"), nil
@@ -117,10 +104,7 @@ func HandleKnowledgeUnhide(store storage.Store) server.ToolHandlerFunc {
 // HandleKnowledgeMute adds an author/tag/domain suppression rule for the caller.
 func HandleKnowledgeMute(store storage.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		userID, ok := callerUserID(ctx)
-		if !ok {
-			return errNoUserScope(), nil
-		}
+		userID := callerActorID(ctx)
 		kind := req.GetString("kind", "")
 		if !validMuteKind(kind) {
 			return mcplib.NewToolResultError("kind must be one of: 'author', 'tag', 'domain'"), nil
@@ -139,10 +123,7 @@ func HandleKnowledgeMute(store storage.Store) server.ToolHandlerFunc {
 // HandleKnowledgeUnmute deletes an author/tag/domain suppression rule.
 func HandleKnowledgeUnmute(store storage.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		userID, ok := callerUserID(ctx)
-		if !ok {
-			return errNoUserScope(), nil
-		}
+		userID := callerActorID(ctx)
 		kind := req.GetString("kind", "")
 		if !validMuteKind(kind) {
 			return mcplib.NewToolResultError("kind must be one of: 'author', 'tag', 'domain'"), nil
@@ -161,10 +142,7 @@ func HandleKnowledgeUnmute(store storage.Store) server.ToolHandlerFunc {
 // HandleKnowledgeVisibility lists the calling user's current suppression rules.
 func HandleKnowledgeVisibility(store storage.Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		userID, ok := callerUserID(ctx)
-		if !ok {
-			return errNoUserScope(), nil
-		}
+		userID := callerActorID(ctx)
 		rules, err := store.ListVisibilityRules(ctx, userID)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("list visibility rules: %v", err)), nil

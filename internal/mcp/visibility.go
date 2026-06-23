@@ -18,24 +18,26 @@ type userByIDStore interface {
 }
 
 // callerVisibility builds the calling user's compiled suppression RuleSet from
-// ctx. It returns a zero (no-op) RuleSet — which hides nothing — when the caller
-// is not user-scoped (tc.UserID == "", i.e. team tokens / stdio) or when the
-// rules cannot be loaded. Owner identities (id/email/name) are included so a
-// user's own entries are never hidden.
+// ctx. It keys off a stable effective actor identity (user id, else API key id,
+// else "local") so the per-user filter works for team tokens, stdio and
+// dev/no-auth setups, not only user-scoped tokens. It returns a zero (no-op)
+// RuleSet — which hides nothing — when the rules cannot be loaded. Owner
+// identities (id/email/name) are included so a user's own entries are never
+// hidden.
 func callerVisibility(ctx context.Context, store storage.Store) visibility.RuleSet {
-	tc := auth.GetTeamContext(ctx)
-	if tc.UserID == "" {
-		return visibility.RuleSet{}
-	}
-	rules, err := store.ListVisibilityRules(ctx, tc.UserID)
+	actorID := auth.GetTeamContext(ctx).EffectiveActorID()
+	rules, err := store.ListVisibilityRules(ctx, actorID)
 	if err != nil {
 		slog.Warn("visibility filter failing open: could not load rules",
-			"user_id", tc.UserID, "error", err)
+			"actor_id", actorID, "error", err)
 		return visibility.RuleSet{}
 	}
-	identities := []string{tc.UserID}
+	identities := []string{actorID}
+	// When the actor is a real user, include their email/name so their own
+	// entries are exempt. For key-id / "local" actors GetUserByID fails and we
+	// fall back to the actor id alone.
 	if us, ok := store.(userByIDStore); ok {
-		if u, err := us.GetUserByID(ctx, tc.UserID); err == nil && u != nil {
+		if u, err := us.GetUserByID(ctx, actorID); err == nil && u != nil {
 			identities = append(identities, u.Email, u.Name)
 		}
 	}

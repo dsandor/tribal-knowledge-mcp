@@ -34,24 +34,17 @@ func toVisibilityRuleResponse(r storage.VisibilityRule) visibilityRuleResponse {
 	}
 }
 
-// requireUser resolves the caller's user id, writing a 400 error and returning
-// ok=false when the request is not user-scoped (e.g. a team-only API key).
-// Per-user visibility rules are meaningless without a user identity.
-func requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {
-	tc := auth.GetTeamContext(r.Context())
-	if tc.UserID == "" {
-		writeError(w, http.StatusBadRequest, "no_user", "requires a user session/user token")
-		return "", false
-	}
-	return tc.UserID, true
+// actorID resolves a stable per-caller identity for the caller's personal
+// visibility rules. It prefers the user id, falling back to the API key id and
+// then the constant "local" (dev-bypass / no-auth), so the feature works for
+// team-scoped keys and single-operator setups. Never empty.
+func actorID(r *http.Request) string {
+	return auth.GetTeamContext(r.Context()).EffectiveActorID()
 }
 
 // handleListVisibility returns the caller's per-user visibility rules.
 func (s *Server) handleListVisibility(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
-	if !ok {
-		return
-	}
+	userID := actorID(r)
 	rules, err := s.store.ListVisibilityRules(r.Context(), userID)
 	if err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("list visibility rules: %v", err))
@@ -66,10 +59,7 @@ func (s *Server) handleListVisibility(w http.ResponseWriter, r *http.Request) {
 
 // handleAddVisibility creates a per-user visibility rule for the caller.
 func (s *Server) handleAddVisibility(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
-	if !ok {
-		return
-	}
+	userID := actorID(r)
 	var body struct {
 		RuleType string `json:"rule_type"`
 		Value    string `json:"value"`
@@ -102,10 +92,7 @@ func (s *Server) handleAddVisibility(w http.ResponseWriter, r *http.Request) {
 // The rule is identified by rule_type+value taken from the JSON body, falling
 // back to query parameters when no body is supplied.
 func (s *Server) handleDeleteVisibility(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUser(w, r)
-	if !ok {
-		return
-	}
+	userID := actorID(r)
 	var body struct {
 		RuleType string `json:"rule_type"`
 		Value    string `json:"value"`
