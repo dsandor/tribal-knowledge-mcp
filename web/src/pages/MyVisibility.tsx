@@ -169,7 +169,19 @@ export default function MyVisibility() {
                                   {r.description}
                                 </Typography>
                               )}
-                              <Typography variant="caption" color="text.disabled" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                              <Typography
+                                variant="caption"
+                                color="text.disabled"
+                                sx={{
+                                  display: 'block',
+                                  mt: 0.5,
+                                  fontFamily: 'monospace',
+                                  fontSize: '0.68rem',
+                                  opacity: 0.45,
+                                  letterSpacing: 0,
+                                  wordBreak: 'break-all',
+                                }}
+                              >
                                 {r.value}
                               </Typography>
                             </Box>
