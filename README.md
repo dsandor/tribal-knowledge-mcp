@@ -514,13 +514,37 @@ unless you pass `--force`**.
 
 ### Engine selection (environment)
 
-Both subcommands pick the storage backend the same way the server does:
+The server **and** both backup subcommands pick the storage backend the same way, from one
+variable — `DATABASE_URL`:
 
 | Variable | Effect |
 |---|---|
-| `DATABASE_URL` | If set, PostgreSQL is used (connection string). |
-| `DATABASE_PATH` | SQLite file path used when `DATABASE_URL` is **not** set (config field `DBPath`, default `knowledge.db`). |
+| `DATABASE_URL` | If set, **PostgreSQL** is used (connection string, e.g. `postgres://user:pass@host:5432/memory?sslmode=disable`). |
+| `DATABASE_PATH` | **SQLite** file path, used only when `DATABASE_URL` is **not** set (config field `DBPath`, default `knowledge.db`). Ignored while `DATABASE_URL` is set. |
 | `EMBEDDING_DIM` | Vector dimension (default `768`). Must be identical on source and target for a restore. |
+
+#### Switching to PostgreSQL with **no data to migrate**
+
+If you don't need to carry over existing data, just point the server at Postgres and start it —
+all tables, indexes, and the pgvector extension are created automatically on first start
+(migrations are idempotent):
+
+```bash
+export DATABASE_URL="postgres://user:pass@host:5432/memory?sslmode=disable"
+# DATABASE_PATH is ignored while DATABASE_URL is set
+./tribal-knowledge          # or: docker compose up  (compose sets DATABASE_URL for you)
+```
+
+To switch **back** to SQLite, unset `DATABASE_URL` (and set `DATABASE_PATH` if you want a
+non-default file). The two stores are independent files/databases — switching the variable
+changes which one is used; it does **not** copy data between them. For that, use the recipe
+below.
+
+> **PostgreSQL must have the `pgvector` extension available.** On startup the server runs
+> `CREATE EXTENSION IF NOT EXISTS vector`, which only succeeds if pgvector is installed in the
+> instance. Use a pgvector-enabled image such as `pgvector/pgvector:pg17` (what the bundled
+> `docker-compose.yml` and `run.sh` use), or a managed Postgres where the `vector` extension
+> is available/enabled. A vanilla Postgres without pgvector will fail to start the server.
 
 ### Recipe: migrate SQLite → PostgreSQL
 
