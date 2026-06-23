@@ -312,7 +312,7 @@ func (m *mockStore) GetShare(_ context.Context, _ string) (*storage.KnowledgeSha
 }
 func (m *mockStore) MarkShareUsed(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockStore) RevokeShare(_ context.Context, _ string) error         { return nil }
-func (m *mockStore) MarkInterruptedRuns(_ context.Context) (int, error) { return 0, nil }
+func (m *mockStore) MarkInterruptedRuns(_ context.Context) (int, error)    { return 0, nil }
 func (m *mockStore) GetAnalysisCache(_ context.Context, _, _ string) (string, bool, error) {
 	return "", false, nil
 }

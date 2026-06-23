@@ -37,9 +37,10 @@ type Server struct {
 	staticFS        fs.FS
 	triggerPipeline chan<- struct{} // optional; set by WithPipelineTrigger
 	oidcSecret      string
-	devBypassAuth   bool       // skips auth middleware — development only
-	rateLimitRPS    int        // 0 means disabled
-	trustXFF        bool       // only enable when deployed behind a known reverse proxy
+	oidcDebugClaims bool              // when true, dump full id_token claims on OIDC login
+	devBypassAuth   bool              // skips auth middleware — development only
+	rateLimitRPS    int               // 0 means disabled
+	trustXFF        bool              // only enable when deployed behind a known reverse proxy
 	aiSrc           *aiconfig.Sources // optional; enables the /refactor endpoint
 	hub             LiveHub
 	presence        *live.Presence
@@ -68,6 +69,14 @@ func (s *Server) WithPipelineTrigger(ch chan<- struct{}) *Server {
 // WithOIDCSecret sets the OIDC client secret for the OIDC callback handler.
 func (s *Server) WithOIDCSecret(secret string) *Server {
 	s.oidcSecret = secret
+	return s
+}
+
+// WithOIDCDebugClaims enables dumping the full id_token claim set to the log on
+// every OIDC login. Diagnostic only — claims contain PII. Gated by the
+// OIDC_DEBUG_CLAIMS env var.
+func (s *Server) WithOIDCDebugClaims(enabled bool) *Server {
+	s.oidcDebugClaims = enabled
 	return s
 }
 

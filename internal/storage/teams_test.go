@@ -76,6 +76,45 @@ func TestListTeams(t *testing.T) {
 	}
 }
 
+func TestGetUserByEmailCaseInsensitive(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	uid, err := s.UpsertUser(ctx, User{Email: "David.Sandor@Acme.com", Role: "admin"})
+	if err != nil {
+		t.Fatalf("UpsertUser: %v", err)
+	}
+
+	cases := []string{
+		"david.sandor@acme.com",    // different case
+		"DAVID.SANDOR@ACME.COM",    // all caps
+		"  David.Sandor@Acme.com ", // surrounding whitespace
+	}
+	for _, q := range cases {
+		got, err := s.GetUserByEmail(ctx, q)
+		if err != nil {
+			t.Fatalf("GetUserByEmail(%q): %v", q, err)
+		}
+		if got.ID != uid {
+			t.Errorf("GetUserByEmail(%q) = %q, want %q", q, got.ID, uid)
+		}
+	}
+
+	// And UpsertUser must merge (update in place), not create a duplicate, when
+	// the email differs only by case — the SSO merge requirement.
+	uid2, err := s.UpsertUser(ctx, User{Email: "david.sandor@acme.com", Name: "David S", ExternalID: "ext-123", Role: "admin"})
+	if err != nil {
+		t.Fatalf("UpsertUser merge: %v", err)
+	}
+	if uid2 != uid {
+		t.Errorf("UpsertUser created a new record %q, want merge into %q", uid2, uid)
+	}
+	merged, _ := s.GetUserByID(ctx, uid)
+	if merged.ExternalID != "ext-123" || merged.Role != "admin" {
+		t.Errorf("merged user = {ext:%q role:%q}, want {ext-123 admin}", merged.ExternalID, merged.Role)
+	}
+}
+
 func TestClaimFirstSuperadmin(t *testing.T) {
 	s := newTestStoreInternal(t)
 	ctx := context.Background()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -309,9 +310,10 @@ func (s *SQLiteStore) GetUserByID(ctx context.Context, id string) (*User, error)
 }
 
 func (s *SQLiteStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	email = strings.TrimSpace(email)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, COALESCE(team_id,''), email, name, external_id, password_hash, role, manually_assigned, created_at
-		FROM users WHERE email = ?
+		FROM users WHERE LOWER(email) = LOWER(?)
 	`, email)
 	u, err := scanUser(row)
 	if err != nil {

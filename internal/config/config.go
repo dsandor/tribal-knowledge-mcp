@@ -29,6 +29,7 @@ type Config struct {
 	HTTPAddr           string
 	SuperadminKey      string
 	OIDCClientSecret   string
+	OIDCDebugClaims    bool
 	MCPHTTPAddr        string
 	MCPHTTPPath        string
 	DatabaseURL        string // DATABASE_URL — if non-empty, uses PostgreSQL instead of SQLite
@@ -188,6 +189,7 @@ func Load() (Config, error) {
 		HTTPAddr:           envOrDefault("HTTP_ADDR", ":8080"),
 		SuperadminKey:      os.Getenv("SUPERADMIN_KEY"),
 		OIDCClientSecret:   os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCDebugClaims:    os.Getenv("OIDC_DEBUG_CLAIMS") == "true",
 		MCPHTTPAddr:        os.Getenv("MCP_HTTP_ADDR"),
 		MCPHTTPPath:        envOrDefault("MCP_HTTP_PATH", "/mcp"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),

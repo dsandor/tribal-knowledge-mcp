@@ -190,6 +190,7 @@ func main() {
 	}
 	webServer := web.NewServer(staticFS, store).
 		WithOIDCSecret(cfg.OIDCClientSecret).
+		WithOIDCDebugClaims(cfg.OIDCDebugClaims).
 		WithPipelineTrigger(triggerCh).
 		WithDevBypass(cfg.DevBypassAuth).
 		WithRateLimitRPS(cfg.RateLimitRPS).

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dsandor/memory/internal/auth"
@@ -162,16 +163,35 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "unauthorized", "OIDC exchange failed")
 		return
 	}
-	user, _ := s.store.GetUserByExternalID(r.Context(), info.ExternalID)
+	// Diagnostic claim dump, gated by OIDC_DEBUG_CLAIMS. Logged before the email
+	// check so a missing-email misconfiguration is still inspectable.
+	if s.oidcDebugClaims {
+		slog.Info("oidc id_token claims", "claims", info.Claims)
+	}
+	// An identity provider that does not return an email claim cannot be mapped
+	// to a user. Show a full-page HTML error rather than provisioning an
+	// email-less record (which would also orphan against the unique email index).
+	email := strings.TrimSpace(info.Email)
+	if email == "" {
+		slog.Warn("oidc: id_token has no email claim", "subject", info.ExternalID)
+		writeHTMLErrorPage(w, http.StatusBadRequest,
+			"Single sign-on is not configured correctly",
+			"Your identity provider did not supply an email address. Ask your administrator to enable the 'email' scope/claim for this application, then try again.")
+		return
+	}
+	// Resolve by email first so an SSO login merges into the existing account
+	// (preserving its role and team) instead of creating a duplicate; fall back
+	// to the external_id link for the email-change case.
+	user, _ := s.store.GetUserByEmail(r.Context(), email)
 	if user == nil {
-		user, _ = s.store.GetUserByEmail(r.Context(), info.Email)
+		user, _ = s.store.GetUserByExternalID(r.Context(), info.ExternalID)
 	}
 	role := "member"
 	if user != nil {
 		role = user.Role
 	}
 	uid, err := s.store.UpsertUser(r.Context(), storage.User{
-		Email:      info.Email,
+		Email:      email,
 		Name:       info.Name,
 		ExternalID: info.ExternalID,
 		Role:       role,

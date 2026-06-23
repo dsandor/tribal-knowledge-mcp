@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -412,9 +413,10 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, id string) (*User, erro
 }
 
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	email = strings.TrimSpace(email)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, team_id, email, name, external_id, password_hash, role, manually_assigned, created_at
-		FROM users WHERE email = $1
+		FROM users WHERE LOWER(email) = LOWER($1)
 	`, email)
 	u, err := scanUserPG(row)
 	if err != nil {

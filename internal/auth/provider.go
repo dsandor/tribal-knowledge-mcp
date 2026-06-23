@@ -16,6 +16,9 @@ type UserInfo struct {
 	Email      string
 	Name       string
 	ExternalID string // OIDC subject claim; empty for local auth
+	// Claims is the full set of id_token claims, captured for diagnostics.
+	// Populated only on the OIDC path; nil for local auth.
+	Claims map[string]any
 }
 
 // Provider abstracts over OIDC and local auth paths.
@@ -121,10 +124,15 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*UserInfo, er
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("parse claims: %w", err)
 	}
+	// Capture the full claim set for diagnostics (OIDC_DEBUG_CLAIMS). A second
+	// decode of the same verified token; failure here is non-fatal.
+	var raw map[string]any
+	_ = idToken.Claims(&raw)
 	return &UserInfo{
 		Email:      claims.Email,
 		Name:       claims.Name,
 		ExternalID: idToken.Subject,
+		Claims:     raw,
 	}, nil
 }
 

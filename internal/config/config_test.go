@@ -150,10 +150,14 @@ func TestConfig_NewFields(t *testing.T) {
 	t.Setenv("OIDC_CLIENT_SECRET", "test-secret")
 	t.Setenv("MCP_HTTP_ADDR", ":9090")
 	t.Setenv("MCP_HTTP_PATH", "/mcp/v1")
+	t.Setenv("OIDC_DEBUG_CLAIMS", "true")
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.OIDCDebugClaims {
+		t.Error("OIDCDebugClaims should be true when OIDC_DEBUG_CLAIMS=true")
 	}
 	if cfg.SuperadminKey != "test-superadmin-key" {
 		t.Errorf("SuperadminKey = %q, want %q", cfg.SuperadminKey, "test-superadmin-key")
