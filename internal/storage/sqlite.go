@@ -859,8 +859,8 @@ func (s *SQLiteStore) RejectEntry(ctx context.Context, id string) error {
 func (s *SQLiteStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) error {
 	tagsJSON, _ := json.Marshal(entry.Tags)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE entries SET title=?, content=?, description=?, domain=?, tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		entry.Title, entry.Content, entry.Description, entry.Domain, string(tagsJSON), entry.ID,
+		`UPDATE entries SET title=?, content=?, description=?, domain=?, tags=?, author=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		entry.Title, entry.Content, entry.Description, entry.Domain, string(tagsJSON), entry.Author, entry.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update entry: %w", err)

@@ -606,9 +606,9 @@ func (s *PostgresStore) UpdateEntry(ctx context.Context, entry KnowledgeEntry) e
 	tagsJSON, _ := json.Marshal(entry.Tags)
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE entries
-		SET title = $1, content = $2, description = $3, domain = $4, tags = $5, updated_at = NOW()
-		WHERE id = $6
-	`, entry.Title, entry.Content, entry.Description, entry.Domain, string(tagsJSON), entry.ID)
+		SET title = $1, content = $2, description = $3, domain = $4, tags = $5, author = $6, updated_at = NOW()
+		WHERE id = $7
+	`, entry.Title, entry.Content, entry.Description, entry.Domain, string(tagsJSON), entry.Author, entry.ID)
 	if err != nil {
 		return fmt.Errorf("update entry: %w", err)
 	}

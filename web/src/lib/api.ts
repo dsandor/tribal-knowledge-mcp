@@ -46,6 +46,7 @@ export interface KnowledgeEntry {
   AutoTags: string[] | null | undefined
   Author: string
   Team: string
+  TeamID: string
   CreatedAt: string
   UpdatedAt: string
   Version: number
@@ -523,6 +524,21 @@ export async function rejectEntry(id: string) {
   const r = await apiFetch(`/api/knowledge/${id}/reject`, { method: 'PUT' });
   if (!r.ok) throw new Error('reject failed');
   return r.json();
+}
+
+// setEntryAuthor sets the author of a knowledge entry. The backend only applies
+// this when the entry's author is currently empty (shown as "unknown" in the
+// UI); a non-empty author is left untouched, protecting real authorship.
+export async function setEntryAuthor(id: string, author: string): Promise<void> {
+  const r = await apiFetch(`/api/knowledge/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message ?? 'set author failed');
+  }
 }
 
 export async function batchApprove(ids: string[]): Promise<{ approved: number; errors: string[] }> {

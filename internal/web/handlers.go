@@ -679,6 +679,7 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 		Description string   `json:"description"`
 		Domain      string   `json:"domain"`
 		Tags        []string `json:"tags"`
+		Author      string   `json:"author"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "bad_request", "invalid JSON body")
@@ -699,6 +700,12 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Tags != nil {
 		existing.Tags = body.Tags
+	}
+	// Allow setting the author only when it is currently empty, protecting real
+	// authorship. A non-empty existing author is never overwritten. This does
+	// not change Content, so it never triggers the re-embed path below.
+	if body.Author != "" && existing.Author == "" {
+		existing.Author = body.Author
 	}
 	if err := s.store.UpdateEntry(ctx, *existing); err != nil {
 		writeError(w, 500, "internal_error", fmt.Sprintf("update entry: %v", err))

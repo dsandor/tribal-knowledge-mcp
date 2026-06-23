@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { api, searchSimilar, addVisibilityRule, type KnowledgeEntry } from '@/lib/api'
-import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX, Share2, Copy } from 'lucide-react'
+import { api, searchSimilar, addVisibilityRule, getMyTeams, setEntryAuthor, type KnowledgeEntry } from '@/lib/api'
+import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX, Share2, Copy, Check, X } from 'lucide-react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -87,6 +87,45 @@ export default function KnowledgeDetail() {
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [sharing, setSharing] = useState(false)
 
+  // team name mapping
+  const [teamNames, setTeamNames] = useState<Record<string, string>>({})
+
+  // inline author editing (only when author is empty)
+  const [authorEditing, setAuthorEditing] = useState(false)
+  const [authorDraft, setAuthorDraft] = useState('')
+  const [authorSaving, setAuthorSaving] = useState(false)
+  const [authorError, setAuthorError] = useState<string | null>(null)
+
+  const teamName = (tid: string | undefined | null): string => {
+    if (!tid) return '—'
+    return teamNames[tid] ?? tid
+  }
+
+  const refreshEntry = async () => {
+    if (!id) return
+    const e = await api.knowledge.get(id)
+    setEntry(e)
+    setRating(e.Rating)
+  }
+
+  const saveAuthor = async () => {
+    if (!entry) return
+    const value = authorDraft.trim()
+    if (!value) return
+    setAuthorSaving(true)
+    setAuthorError(null)
+    try {
+      await setEntryAuthor(entry.ID, value)
+      await refreshEntry()
+      setAuthorEditing(false)
+      setAuthorDraft('')
+    } catch (e) {
+      setAuthorError(e instanceof Error ? e.message : 'Set author failed.')
+    } finally {
+      setAuthorSaving(false)
+    }
+  }
+
   const handleShare = async () => {
     if (!entry) return
     setSharing(true)
@@ -145,6 +184,18 @@ export default function KnowledgeDetail() {
       .catch(e => { if (!ignore) setError(e instanceof Error ? e.message : String(e)) })
     return () => { ignore = true }
   }, [id])
+
+  // Load team names once for the id -> name mapping. Resilient to failure.
+  useEffect(() => {
+    let ignore = false
+    getMyTeams()
+      .then(res => {
+        if (ignore) return
+        setTeamNames(Object.fromEntries((res.teams ?? []).map(t => [t.id, t.name])))
+      })
+      .catch(() => { /* skip team names on error */ })
+    return () => { ignore = true }
+  }, [])
 
   const saveRating = async () => {
     if (!id) return
@@ -394,13 +445,45 @@ export default function KnowledgeDetail() {
         </DialogActions>
       </Dialog>
 
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
         {entry.Domain && (
           <Chip label={entry.Domain} size="small" variant="outlined" />
         )}
-        {entry.Author && (
+        {entry.Author ? (
           <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>{entry.Author}</Typography>
+        ) : authorEditing ? (
+          <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+            <TextField
+              value={authorDraft}
+              onChange={e => setAuthorDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); saveAuthor() }
+                if (e.key === 'Escape') { e.preventDefault(); setAuthorEditing(false); setAuthorDraft('') }
+              }}
+              placeholder="author"
+              size="small"
+              autoFocus
+              disabled={authorSaving}
+              sx={{ '& .MuiInputBase-input': { py: 0.25, fontSize: 13, width: 140 } }}
+            />
+            <IconButton size="small" onClick={saveAuthor} disabled={authorSaving || !authorDraft.trim()} title="Save author">
+              <Check style={{ width: 16, height: 16 }} />
+            </IconButton>
+            <IconButton size="small" onClick={() => { setAuthorEditing(false); setAuthorDraft('') }} disabled={authorSaving} title="Cancel">
+              <X style={{ width: 16, height: 16 }} />
+            </IconButton>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', fontStyle: 'italic' }}>unknown</Typography>
+            <IconButton size="small" onClick={() => { setAuthorEditing(true); setAuthorDraft(''); setAuthorError(null) }} title="Set author" sx={{ p: 0.25 }}>
+              <Pencil style={{ width: 14, height: 14 }} />
+            </IconButton>
+          </Box>
         )}
+        <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
+          · {teamName(entry.TeamID || entry.Team)}
+        </Typography>
         {entry.Tags?.map(t => (
           <TagPill key={t} label={t} variant="user" />
         ))}
@@ -414,6 +497,8 @@ export default function KnowledgeDetail() {
           {entry.UsageCount ?? 0} uses
         </Typography>
       </Box>
+
+      {authorError && <Alert severity="error" onClose={() => setAuthorError(null)}>{authorError}</Alert>}
 
       {entry.Description && (
         <Card>

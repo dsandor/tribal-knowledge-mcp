@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, copyKnowledge, getMe, getMyTeams, moveKnowledge, type KnowledgeEntry } from '@/lib/api'
-import { ChevronLeft, ChevronRight, Search, Tag } from 'lucide-react'
+import { api, copyKnowledge, getMe, getMyTeams, moveKnowledge, setEntryAuthor, type KnowledgeEntry } from '@/lib/api'
+import { Check, ChevronLeft, ChevronRight, Pencil, Search, Tag, X } from 'lucide-react'
 import { TagPill } from '@/components/ui/tag-pill'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -121,6 +121,19 @@ export default function KnowledgeBrowser() {
   const [bulkError, setBulkError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
+  // --- Team name mapping (all users) ---
+  const [teamNames, setTeamNames] = useState<Record<string, string>>({})
+
+  // --- Inline author editing (entries with empty author) ---
+  const [authorEditId, setAuthorEditId] = useState<string | null>(null)
+  const [authorDraft, setAuthorDraft] = useState('')
+  const [authorSaving, setAuthorSaving] = useState(false)
+
+  const teamName = (id: string | undefined | null): string => {
+    if (!id) return '—'
+    return teamNames[id] ?? id
+  }
+
   const fetchEntries = useCallback(() => {
     let ignore = false
     setLoading(true)
@@ -135,15 +148,20 @@ export default function KnowledgeBrowser() {
 
   useEffect(() => fetchEntries(), [fetchEntries])
 
-  // Determine superadmin once; load teams lazily for the pickers.
+  // Determine superadmin once; load teams for the pickers and for the
+  // id -> name mapping used in card meta lines.
   useEffect(() => {
     let ignore = false
-    getMe()
-      .then(me => {
-        if (ignore || me.role !== 'superadmin') return
-        setIsSuperadmin(true)
-        return getMyTeams().then(res => { if (!ignore) setTeams(res.teams ?? []) })
+    getMyTeams()
+      .then(res => {
+        if (ignore) return
+        const list = res.teams ?? []
+        setTeams(list)
+        setTeamNames(Object.fromEntries(list.map(t => [t.id, t.name])))
       })
+      .catch(() => { /* unauth or error: skip team names, don't crash */ })
+    getMe()
+      .then(me => { if (!ignore && me.role === 'superadmin') setIsSuperadmin(true) })
       .catch(() => { /* non-superadmin or unauthenticated: leave page unchanged */ })
     return () => { ignore = true }
   }, [])
@@ -160,6 +178,53 @@ export default function KnowledgeBrowser() {
   const clearSelection = () => setSelected(new Set())
 
   const selectedIds = Array.from(selected)
+
+  // Select-all state across the currently-rendered page of entries.
+  const allSelected = entries.length > 0 && entries.every(e => selected.has(e.ID))
+  const someSelected = entries.some(e => selected.has(e.ID))
+
+  const toggleSelectAll = () => {
+    setSelected(prev => {
+      if (entries.length > 0 && entries.every(e => prev.has(e.ID))) {
+        // all currently visible are selected -> deselect them
+        const next = new Set(prev)
+        entries.forEach(e => next.delete(e.ID))
+        return next
+      }
+      // otherwise select all visible
+      const next = new Set(prev)
+      entries.forEach(e => next.add(e.ID))
+      return next
+    })
+  }
+
+  const startAuthorEdit = (id: string) => {
+    setAuthorEditId(id)
+    setAuthorDraft('')
+    setBulkError(null)
+  }
+
+  const cancelAuthorEdit = () => {
+    setAuthorEditId(null)
+    setAuthorDraft('')
+  }
+
+  const saveAuthor = async (id: string) => {
+    const value = authorDraft.trim()
+    if (!value) return
+    setAuthorSaving(true)
+    try {
+      await setEntryAuthor(id, value)
+      setAuthorEditId(null)
+      setAuthorDraft('')
+      fetchEntries()
+      setToast('Author set.')
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Set author failed.')
+    } finally {
+      setAuthorSaving(false)
+    }
+  }
 
   const handleMoveConfirm = async () => {
     if (!moveTarget || selectedIds.length === 0) return
@@ -336,6 +401,21 @@ export default function KnowledgeBrowser() {
           {entries.length === 0 && (
             <Typography color="text.secondary">No entries found.</Typography>
           )}
+          {isSuperadmin && entries.length > 0 && (
+            <FormControlLabel
+              sx={{ ml: 0, mb: 0.5 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={allSelected}
+                  indeterminate={!allSelected && someSelected}
+                  onChange={toggleSelectAll}
+                  slotProps={{ input: { 'aria-label': 'Select all entries on this page' } }}
+                />
+              }
+              label={<Typography variant="caption" color="text.secondary">Select all</Typography>}
+            />
+          )}
           {entries.map(e => {
             const snippet = getSnippet(e.Content ?? '', search)
             const card = (
@@ -359,9 +439,52 @@ export default function KnowledgeBrowser() {
                     >
                       {search ? <Highlight text={e.Title} query={search} /> : e.Title}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                      {e.Domain || 'no domain'} · {e.Author || 'unknown'} · ★ {(e.Rating ?? 0).toFixed(1)}
-                    </Typography>
+                    <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {e.Domain || 'no domain'} ·{' '}
+                      </Typography>
+                      {e.Author ? (
+                        <Typography variant="caption" color="text.secondary">{e.Author}</Typography>
+                      ) : authorEditId === e.ID ? (
+                        <Box
+                          sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                          onClick={ev => { ev.preventDefault(); ev.stopPropagation() }}
+                        >
+                          <TextField
+                            value={authorDraft}
+                            onChange={ev => setAuthorDraft(ev.target.value)}
+                            onKeyDown={ev => {
+                              if (ev.key === 'Enter') { ev.preventDefault(); saveAuthor(e.ID) }
+                              if (ev.key === 'Escape') { ev.preventDefault(); cancelAuthorEdit() }
+                            }}
+                            placeholder="author"
+                            size="small"
+                            autoFocus
+                            disabled={authorSaving}
+                            sx={{ '& .MuiInputBase-input': { py: 0.25, fontSize: 12, width: 110 } }}
+                          />
+                          <IconButton size="small" onClick={() => saveAuthor(e.ID)} disabled={authorSaving || !authorDraft.trim()} title="Save author">
+                            <Check style={{ width: 14, height: 14 }} />
+                          </IconButton>
+                          <IconButton size="small" onClick={cancelAuthorEdit} disabled={authorSaving} title="Cancel">
+                            <X style={{ width: 14, height: 14 }} />
+                          </IconButton>
+                        </Box>
+                      ) : (
+                        <Box
+                          sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25 }}
+                          onClick={ev => { ev.preventDefault(); ev.stopPropagation() }}
+                        >
+                          <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>unknown</Typography>
+                          <IconButton size="small" onClick={() => startAuthorEdit(e.ID)} title="Set author" sx={{ p: 0.25 }}>
+                            <Pencil style={{ width: 12, height: 12 }} />
+                          </IconButton>
+                        </Box>
+                      )}
+                      <Typography variant="caption" color="text.secondary">
+                        · {teamName(e.TeamID || e.Team)} · ★ {(e.Rating ?? 0).toFixed(1)}
+                      </Typography>
+                    </Box>
                     {(() => {
                       const user = e.Tags ?? []
                       const auto = e.AutoTags ?? []
