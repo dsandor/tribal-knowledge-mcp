@@ -41,20 +41,21 @@ func TestKnowledgeHide_AddsItemRule(t *testing.T) {
 	}
 }
 
-func TestKnowledgeHide_NoUserID_Errors(t *testing.T) {
+func TestKnowledgeHide_NoUserID_UsesFallbackIdentity(t *testing.T) {
 	store := &mockStore{}
 	handler := internalmcp.HandleKnowledgeHide(store)
 
-	// Empty UserID (team token / stdio): must error and add nothing.
+	// Empty UserID and empty KeyID (dev-bypass / stdio): the tool succeeds and
+	// operates under the "local" fallback identity.
 	res, err := handler(context.Background(), callReq("entry_id", "X"))
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected tool error for missing user id, got success: %s", textContent(res))
+	if res.IsError {
+		t.Fatalf("expected success under fallback identity, got error: %s", textContent(res))
 	}
-	if len(store.visRules) != 0 {
-		t.Errorf("no rules should have been added, got %v", store.visRules)
+	if !findVisRule(t, store, "local", "item", "X") {
+		t.Errorf("expected item rule under fallback 'local' identity, rules=%v", store.visRules)
 	}
 }
 
@@ -122,16 +123,57 @@ func TestKnowledgeMute_InvalidKind_Errors(t *testing.T) {
 	}
 }
 
-func TestKnowledgeMute_NoUserID_Errors(t *testing.T) {
+func TestKnowledgeMute_NoUserID_UsesFallbackIdentity(t *testing.T) {
 	store := &mockStore{}
 	handler := internalmcp.HandleKnowledgeMute(store)
 
+	// No user id and no key id: succeeds under the "local" fallback identity.
 	res, err := handler(context.Background(), callReq("kind", "author", "value", "bob"))
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected tool error for missing user id, got: %s", textContent(res))
+	if res.IsError {
+		t.Fatalf("expected success under fallback identity, got: %s", textContent(res))
+	}
+	if !findVisRule(t, store, "local", "author", "bob") {
+		t.Errorf("expected author rule under fallback 'local' identity, rules=%v", store.visRules)
+	}
+}
+
+// TestKnowledgeMute_KeyIDFallback verifies that when only a KeyID is present
+// (a team-scoped API key, no user id) the rule is stored under the key id.
+func TestKnowledgeMute_KeyIDFallback(t *testing.T) {
+	store := &mockStore{}
+	handler := internalmcp.HandleKnowledgeMute(store)
+
+	ctx := ctxWithKey("t1", "key-123")
+	res, err := handler(ctx, callReq("kind", "author", "value", "bob"))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success under key-id identity, got: %s", textContent(res))
+	}
+	if !findVisRule(t, store, "key-123", "author", "bob") {
+		t.Errorf("expected author rule under key id, rules=%v", store.visRules)
+	}
+}
+
+// TestKnowledgeMute_UserIDPrecedence verifies that when a real UserID is present
+// it takes precedence over the key id for the stored rule's owner.
+func TestKnowledgeMute_UserIDPrecedence(t *testing.T) {
+	store := &mockStore{}
+	handler := internalmcp.HandleKnowledgeMute(store)
+
+	res, err := handler(ctxWithUser("t1", "user-a"), callReq("kind", "author", "value", "bob"))
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", textContent(res))
+	}
+	if !findVisRule(t, store, "user-a", "author", "bob") {
+		t.Errorf("expected rule under user id (precedence), rules=%v", store.visRules)
 	}
 }
 
@@ -202,16 +244,28 @@ func TestKnowledgeVisibility_ListsRules(t *testing.T) {
 	}
 }
 
-func TestKnowledgeVisibility_NoUserID_Errors(t *testing.T) {
-	store := &mockStore{}
+func TestKnowledgeVisibility_NoUserID_UsesFallbackIdentity(t *testing.T) {
+	store := &mockStore{
+		visRules: map[string][]storage.VisibilityRule{
+			"local": {{RuleType: "item", Value: "X"}},
+		},
+	}
 	handler := internalmcp.HandleKnowledgeVisibility(store)
 
+	// No user id / no key id: lists the "local" fallback identity's rules.
 	res, err := handler(context.Background(), callReq())
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected tool error for missing user id, got: %s", textContent(res))
+	if res.IsError {
+		t.Fatalf("expected success under fallback identity, got: %s", textContent(res))
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(textContent(res)), &got); err != nil {
+		t.Fatalf("parse result JSON: %v\n%s", err, textContent(res))
+	}
+	if len(got) != 1 || got[0]["rule_type"] != "item" || got[0]["value"] != "X" {
+		t.Fatalf("expected the 'local' identity's single rule, got %v", got)
 	}
 }
 

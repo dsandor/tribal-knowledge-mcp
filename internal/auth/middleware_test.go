@@ -455,3 +455,25 @@ func TestRequireAuth_NilPresenceHook_DoesNotPanic(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
+
+// TestEffectiveActorID verifies the user->key->local precedence used by the
+// per-caller visibility feature.
+func TestEffectiveActorID(t *testing.T) {
+	cases := []struct {
+		name string
+		tc   auth.TeamContext
+		want string
+	}{
+		{"user id wins", auth.TeamContext{UserID: "u1", KeyID: "k1"}, "u1"},
+		{"key id fallback", auth.TeamContext{KeyID: "k1"}, "k1"},
+		{"local fallback", auth.TeamContext{}, "local"},
+		{"dev bypass superadmin -> local", auth.TeamContext{Role: "superadmin"}, "local"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.tc.EffectiveActorID(); got != c.want {
+				t.Errorf("EffectiveActorID() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

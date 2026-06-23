@@ -20,6 +20,16 @@ func ctxWithUser(teamID, userID string) context.Context {
 	})
 }
 
+// ctxWithKey returns a context carrying a team-scoped (key-only, no user id)
+// TeamContext, exercising the EffectiveActorID key-id fallback.
+func ctxWithKey(teamID, keyID string) context.Context {
+	return auth.WithTestTeamContext(context.Background(), auth.TeamContext{
+		TeamID: teamID,
+		KeyID:  keyID,
+		Role:   "member",
+	})
+}
+
 func entryIDs(t *testing.T, jsonText string) map[string]bool {
 	t.Helper()
 	var entries []map[string]any
