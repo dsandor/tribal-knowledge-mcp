@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/enrich"
 	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/storage"
 )
@@ -291,7 +292,7 @@ func TestEnrichContextFiltersByTeam(t *testing.T) {
 	embedder := &mockEmbedder{embedding: []float32{0.1, 0.2}}
 	src := newTestSources(embedder, nil)
 
-	handler := internalmcp.HandleEnrichContext(store, src, nil)
+	handler := internalmcp.HandleEnrichContext(store, src, nil, enrich.EnrichDefaults{})
 	ctx := ctxWithTeam("t1")
 	req := callReq("prompt", "what is the best approach for financial analysis?")
 

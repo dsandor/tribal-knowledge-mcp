@@ -36,6 +36,27 @@ func (s *Server) handleMyTeams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"teams": teams, "active_team": tc.TeamID})
 }
 
+// handleOnboardingStatus returns whether the caller should be guided through
+// first-deployment onboarding (creating the first real team). Onboarding is
+// only ever required for a superadmin on a deployment that has no team other
+// than the reserved "unassigned" team; non-superadmins never onboard, and once
+// any real team exists onboarding is complete.
+func (s *Server) handleOnboardingStatus(w http.ResponseWriter, r *http.Request) {
+	tc := auth.GetTeamContext(r.Context())
+	needs := false
+	if tc.Role == "superadmin" {
+		teams, _ := s.store.ListTeams(r.Context())
+		realTeams := 0
+		for _, t := range teams {
+			if t.ID != storage.UnassignedTeamID {
+				realTeams++
+			}
+		}
+		needs = realTeams == 0
+	}
+	writeJSON(w, map[string]any{"needs_onboarding": needs})
+}
+
 // handleListUserTeams returns the teams a specific user belongs to (home team
 // plus memberships). Used by the Users page membership editor to show current
 // state. Gated by RequireAdmin at the route level.

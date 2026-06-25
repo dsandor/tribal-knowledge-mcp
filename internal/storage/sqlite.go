@@ -196,6 +196,31 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS enrichment_prefs (
+			user_id       TEXT PRIMARY KEY,
+			min_relevance REAL,
+			max_memories  INTEGER,
+			llm_rewrite   INTEGER,
+			updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create enrichment_prefs table: %w", err)
+	}
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS enrichment_rules (
+			user_id    TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			value      TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (user_id, kind, value)
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("create enrichment_rules table: %w", err)
+	}
+
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS rules (
 			id          TEXT    PRIMARY KEY,
 			title       TEXT    NOT NULL,
@@ -296,6 +321,16 @@ func (s *SQLiteStore) migrate() error {
 			oidc_redirect_url TEXT NOT NULL DEFAULT '',
 			updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS embedding_config (
+			id              INTEGER PRIMARY KEY CHECK (id = 1),
+			provider        TEXT NOT NULL DEFAULT 'openai',
+			model           TEXT NOT NULL DEFAULT '',
+			openai_api_key  TEXT NOT NULL DEFAULT '',
+			openai_base_url TEXT NOT NULL DEFAULT '',
+			ollama_url      TEXT NOT NULL DEFAULT '',
+			dimension       INTEGER NOT NULL DEFAULT 0,
+			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS team_settings (
 			team_id              TEXT PRIMARY KEY REFERENCES teams(id),
 			domains              TEXT NOT NULL DEFAULT '[]',
@@ -325,6 +360,17 @@ func (s *SQLiteStore) migrate() error {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("phase5 create table: %w", err)
 		}
+	}
+
+	// Seed the singleton embedding_config row (id=1) when absent. The default
+	// provider is OpenAI with the small embedding model; dimension mirrors the
+	// store's current physical embedding column dimension.
+	if _, err := s.db.Exec(`
+		INSERT OR IGNORE INTO embedding_config
+			(id, provider, model, openai_api_key, openai_base_url, ollama_url, dimension, updated_at)
+		VALUES (1, 'openai', 'text-embedding-3-small', '', 'https://api.openai.com', '', ?, CURRENT_TIMESTAMP)
+	`, s.embeddingDim); err != nil {
+		return fmt.Errorf("phase5 seed embedding_config: %w", err)
 	}
 
 	// Backfill each existing user's home team as a membership row (idempotent).
@@ -888,6 +934,68 @@ func (s *SQLiteStore) ReassignEntriesTeam(ctx context.Context, entryIDs []string
 		}
 	}
 	return tx.Commit()
+}
+
+// RebuildEmbeddingColumns drops and recreates the sqlite-vec virtual tables
+// (vec_entries and vec_chunks) plus the per-entry blob table (entry_embeddings)
+// at newDim, discarding all stored vectors. The text table entry_chunks is
+// preserved. On success s.embeddingDim is set to newDim.
+//
+// The vec0 virtual tables bake the dimension into their schema (FLOAT[%d]) and
+// reject inserts of the wrong length, so they must be recreated to change dim.
+// entry_embeddings is an untyped BLOB column, but it stores dim-sized vectors,
+// so it is cleared here to avoid mixing old/new dimensions; the re-embed job
+// repopulates it. A single admin action invokes this, so no mutex is taken.
+func (s *SQLiteStore) RebuildEmbeddingColumns(ctx context.Context, newDim int) error {
+	if newDim <= 0 {
+		return fmt.Errorf("rebuild embedding columns: invalid dimension %d", newDim)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Drop the vector tables only; entry_chunks (text) is intentionally kept.
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS vec_chunks`); err != nil {
+		return fmt.Errorf("drop vec_chunks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS vec_entries`); err != nil {
+		return fmt.Errorf("drop vec_entries: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS entry_embeddings`); err != nil {
+		return fmt.Errorf("drop entry_embeddings: %w", err)
+	}
+
+	// Recreate at the new dimension, mirroring the original CREATE in migrate().
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		CREATE VIRTUAL TABLE vec_entries USING vec0(
+			embedding FLOAT[%d]
+		);
+	`, newDim)); err != nil {
+		return fmt.Errorf("recreate vec_entries table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE entry_embeddings (
+			rowid     INTEGER PRIMARY KEY REFERENCES entries(rowid) ON DELETE CASCADE,
+			embedding BLOB NOT NULL
+		);
+	`); err != nil {
+		return fmt.Errorf("recreate entry_embeddings table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		CREATE VIRTUAL TABLE vec_chunks USING vec0(
+			embedding FLOAT[%d]
+		);
+	`, newDim)); err != nil {
+		return fmt.Errorf("recreate vec_chunks table: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rebuild embedding columns: %w", err)
+	}
+	s.embeddingDim = newDim
+	return nil
 }
 
 func (s *SQLiteStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {

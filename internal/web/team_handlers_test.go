@@ -93,6 +93,67 @@ func TestListUserTeams(t *testing.T) {
 	}
 }
 
+func TestOnboardingStatus(t *testing.T) {
+	get := func(store *mockStore) bool {
+		t.Helper()
+		srv := newTestServer(t, store)
+		req := authRequest("GET", "/api/onboarding-status", "")
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			NeedsOnboarding bool `json:"needs_onboarding"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.NeedsOnboarding
+	}
+
+	t.Run("superadmin with only the reserved unassigned team needs onboarding", func(t *testing.T) {
+		store := &mockStore{
+			apiKeyRole: "superadmin",
+			teamsList:  []storage.Team{{ID: storage.UnassignedTeamID, Name: "Unassigned"}},
+		}
+		if !get(store) {
+			t.Errorf("needs_onboarding = false, want true")
+		}
+	})
+
+	t.Run("superadmin with no teams needs onboarding", func(t *testing.T) {
+		store := &mockStore{apiKeyRole: "superadmin"}
+		if !get(store) {
+			t.Errorf("needs_onboarding = false, want true")
+		}
+	})
+
+	t.Run("superadmin with a real team does not need onboarding", func(t *testing.T) {
+		store := &mockStore{
+			apiKeyRole: "superadmin",
+			teamsList: []storage.Team{
+				{ID: storage.UnassignedTeamID, Name: "Unassigned"},
+				{ID: "team-1", Name: "Team One"},
+			},
+		}
+		if get(store) {
+			t.Errorf("needs_onboarding = true, want false")
+		}
+	})
+
+	t.Run("non-superadmin never needs onboarding", func(t *testing.T) {
+		store := &mockStore{
+			apiKeyRole: "admin",
+			// No real teams exist, yet a non-superadmin must never onboard.
+			teamsList: []storage.Team{{ID: storage.UnassignedTeamID, Name: "Unassigned"}},
+		}
+		if get(store) {
+			t.Errorf("needs_onboarding = true, want false")
+		}
+	})
+}
+
 func TestMembershipEndpoints(t *testing.T) {
 	t.Run("superadmin adds membership to any team", func(t *testing.T) {
 		store := &mockStore{apiKeyRole: "superadmin"}

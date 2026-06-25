@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/auth"
@@ -24,6 +25,7 @@ type storeResult struct {
 	Message            string `json:"message,omitempty"`
 	ChunkCount         int    `json:"chunk_count,omitempty"`
 	EmbeddingMaxTokens int    `json:"embedding_max_tokens,omitempty"`
+	EmbeddingSkipped   bool   `json:"embedding_skipped,omitempty"`
 }
 
 func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...live.EventBus) func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -110,29 +112,44 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 			Tags:        entryTags,
 		}
 
-		// Resolve embedder per call so saved team settings take effect immediately.
-		embedder := src.Embedder(ctx, teamID)
-		if embedder == nil {
-			return mcplib.NewToolResultError("embedding not configured — set OLLAMA_URL to enable knowledge storage"), nil
-		}
-
-		// Split large content into per-chunk embeddings so nothing is lost to a
-		// single truncated vector. StoreEntryChunked is transactional, so on any
-		// per-chunk embed failure we bail out with no partial store.
+		// Split large content into per-chunk text. StoreEntryChunked tolerates
+		// chunks with a nil Embedding (it inserts the text row and skips the
+		// vector), so embedding is fail-soft: a missing embedder or an Embed
+		// error stores the entry text WITHOUT vectors rather than failing the
+		// tool call. Re-embedding later backfills the vectors.
 		cfg := src.ChunkConfig(ctx, teamID)
 		chunks := embedding.Chunk(content, cfg)
 		entryChunks := make([]storage.EntryChunk, 0, len(chunks))
+
+		// Resolve embedder per call so saved team settings take effect immediately.
+		embedder := src.Embedder(ctx, teamID)
+		embeddingSkipped := false
+		if embedder == nil {
+			embeddingSkipped = true
+			slog.Warn("knowledge store: embedding skipped", "team", teamID, "err", "embedding not configured")
+		}
+
 		for _, c := range chunks {
-			emb, err := embedder.Embed(ctx, c.Content)
-			if err != nil {
-				return mcplib.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
-			}
-			entryChunks = append(entryChunks, storage.EntryChunk{
+			ec := storage.EntryChunk{
 				Index:         c.Index,
 				Content:       c.Content,
 				TokenEstimate: c.TokenEstimate,
-				Embedding:     emb,
-			})
+			}
+			if embedder != nil && !embeddingSkipped {
+				emb, err := embedder.Embed(ctx, c.Content)
+				if err != nil {
+					// Fail-soft: drop any vectors already gathered and store
+					// text-only chunks so the entry still persists.
+					slog.Warn("knowledge store: embedding skipped", "team", teamID, "chunk", c.Index, "err", err)
+					embeddingSkipped = true
+					for i := range entryChunks {
+						entryChunks[i].Embedding = nil
+					}
+				} else {
+					ec.Embedding = emb
+				}
+			}
+			entryChunks = append(entryChunks, ec)
 		}
 
 		id, err := store.StoreEntryChunked(ctx, entry, entryChunks)
@@ -162,6 +179,7 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 			Status:             "stored",
 			ChunkCount:         len(entryChunks),
 			EmbeddingMaxTokens: cfg.MaxTokens,
+			EmbeddingSkipped:   embeddingSkipped,
 		})
 		return mcplib.NewToolResultText(string(out)), nil
 	}

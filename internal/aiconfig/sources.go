@@ -6,6 +6,7 @@ import (
 
 	"github.com/dsandor/memory/internal/embedding"
 	"github.com/dsandor/memory/internal/llm"
+	"github.com/dsandor/memory/internal/storage"
 )
 
 // LLMProvider is the narrow interface required by Sources to obtain cached LLM clients.
@@ -19,6 +20,13 @@ type LLMProvider interface {
 // *embedding.Provider satisfies this.
 type EmbedProvider interface {
 	Embedder(url, model string) embedding.Embedder
+	OpenAIEmbedder(baseURL, apiKey, model string) embedding.Embedder
+}
+
+// EmbedConfigStore is the narrow interface Sources uses to read the
+// deployment-wide embedding configuration. The storage stores satisfy it.
+type EmbedConfigStore interface {
+	GetEmbeddingConfig(ctx context.Context) (*storage.EmbeddingConfig, error)
 }
 
 // Sources resolves ready-to-use AI clients from the effective configuration on
@@ -27,6 +35,11 @@ type Sources struct {
 	Resolver *Resolver
 	LLM      LLMProvider
 	Embed    EmbedProvider
+	// EmbedConfig provides the deployment-wide (singleton) embedding provider
+	// configuration. Embedder resolves the active embedder (OpenAI or Ollama)
+	// from this config. *storage.SQLiteStore / *storage.PostgresStore satisfy
+	// it via GetEmbeddingConfig. When nil, Embedder returns nil (fail-soft).
+	EmbedConfig EmbedConfigStore
 	// DefaultTeam is the team ID applied as a fallback by every method
 	// (AnalysisLLM, AgentLLM, ImprovementLLM, Embedder) when the caller
 	// supplies an empty teamID. This is typically set at startup to the
@@ -145,19 +158,32 @@ func (s *Sources) EnrichmentLLM(ctx context.Context, teamID string) llm.Client {
 	return s.LLMForTouchpoint(ctx, teamID, TouchpointEnrichment)
 }
 
-// Embedder returns a cached Embedder for the effective Ollama URL+model for teamID.
-// Returns nil when no effective Ollama URL is configured.
-// If teamID is empty, DefaultTeam is used as a fallback.
+// Embedder returns a cached Embedder for the deployment-wide embedding
+// configuration (read from EmbedConfig), independent of teamID. The provider
+// (OpenAI or Ollama), model, and connection details all come from the singleton
+// embedding_config row. Returns nil when EmbedConfig is unset, the config cannot
+// be read, or the configured provider is unknown — callers treat nil as
+// "embedding disabled" (fail-soft). teamID is accepted for signature
+// compatibility but does not affect resolution.
 func (s *Sources) Embedder(ctx context.Context, teamID string) embedding.Embedder {
-	if teamID == "" {
-		teamID = s.DefaultTeam
-	}
-	cfg, err := s.Resolver.Effective(ctx, teamID)
-	if err != nil {
-		slog.Warn("aiconfig: resolve effective config for Embedder", "team", teamID, "err", err)
+	if s.EmbedConfig == nil {
+		slog.Warn("aiconfig: embedder unconfigured (no EmbedConfig source)")
 		return nil
 	}
-	return s.Embed.Embedder(cfg.OllamaURL.Effective, cfg.OllamaModel.Effective)
+	cfg, err := s.EmbedConfig.GetEmbeddingConfig(ctx)
+	if err != nil || cfg == nil {
+		slog.Warn("aiconfig: read embedding config for Embedder", "err", err)
+		return nil
+	}
+	switch cfg.Provider {
+	case "openai":
+		return s.Embed.OpenAIEmbedder(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, cfg.Model)
+	case "ollama":
+		return s.Embed.Embedder(cfg.OllamaURL, cfg.Model)
+	default:
+		slog.Warn("aiconfig: unknown embedding provider", "provider", cfg.Provider)
+		return nil
+	}
 }
 
 // ChunkConfig returns the effective content-chunking configuration for teamID,

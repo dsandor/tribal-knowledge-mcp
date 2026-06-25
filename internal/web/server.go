@@ -46,6 +46,10 @@ type Server struct {
 	presence        *live.Presence
 	embeddingDim    int    // used by the backup/restore endpoints
 	appVersion      string // used by the backup/restore endpoints
+	// enrichMinRelevance/enrichMaxMemories are the deployment-wide enrichment
+	// defaults applied to per-user prefs scalars the user has not overridden.
+	enrichMinRelevance float64
+	enrichMaxMemories  int
 }
 
 // NewServer wires all routes and returns a ready Server.
@@ -94,6 +98,15 @@ func (s *Server) WithAISources(src *aiconfig.Sources) *Server {
 func (s *Server) WithLive(hub LiveHub, presence *live.Presence) *Server {
 	s.hub = hub
 	s.presence = presence
+	return s
+}
+
+// WithEnrichDefaults sets the deployment-wide enrichment defaults (minimum
+// relevance threshold and maximum memories) used to resolve per-user
+// enrichment preferences the user has not explicitly overridden.
+func (s *Server) WithEnrichDefaults(minRelevance float64, maxMemories int) *Server {
+	s.enrichMinRelevance = minRelevance
+	s.enrichMaxMemories = maxMemories
 	return s
 }
 
@@ -208,6 +221,7 @@ func (s *Server) routes() {
 		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Get("/api/me", s.handleMe)
 		r.Get("/api/me/teams", s.handleMyTeams)
+		r.Get("/api/onboarding-status", s.handleOnboardingStatus)
 		r.Get("/api/stats", s.handleStats)
 		r.Get("/api/knowledge", s.handleKnowledgeList)
 		r.Get("/api/knowledge/export", s.handleKnowledgeExport)
@@ -237,6 +251,12 @@ func (s *Server) routes() {
 		r.Get("/api/visibility", s.handleListVisibility)
 		r.Post("/api/visibility", s.handleAddVisibility)
 		r.Delete("/api/visibility", s.handleDeleteVisibility)
+		// Per-user enrichment tuning (prefs, preview playground, pins).
+		r.Get("/api/enrichment/prefs", s.handleGetEnrichmentPrefs)
+		r.Put("/api/enrichment/prefs", s.handlePutEnrichmentPrefs)
+		r.Post("/api/enrichment/preview", s.handlePreviewEnrichment)
+		r.Post("/api/enrichment/pins/{id}", s.handlePinEntry)
+		r.Delete("/api/enrichment/pins/{id}", s.handleUnpinEntry)
 		// Cross-team sharing. View + import both require auth; the share token
 		// itself is the grant (no source-team access check on view/import).
 		r.Post("/api/knowledge/{id}/share", s.handleCreateShare)
@@ -299,6 +319,9 @@ func (s *Server) routes() {
 		r.Post("/api/admin/restore", s.handleRestoreUpload)
 		r.Post("/api/admin/knowledge/move", s.handleMoveKnowledge)
 		r.Post("/api/admin/knowledge/copy", s.handleCopyKnowledge)
+		r.Post("/api/admin/reembed", s.handleReembedAll)
+		r.Get("/api/admin/embedding-config", s.handleGetEmbeddingConfig)
+		r.Put("/api/admin/embedding-config", s.handlePutEmbeddingConfig)
 	})
 
 	// SPA fallback

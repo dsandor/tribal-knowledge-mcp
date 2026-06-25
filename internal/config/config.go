@@ -32,11 +32,13 @@ type Config struct {
 	OIDCDebugClaims    bool
 	MCPHTTPAddr        string
 	MCPHTTPPath        string
-	DatabaseURL        string // DATABASE_URL — if non-empty, uses PostgreSQL instead of SQLite
-	DevBypassAuth      bool   // DEV_BYPASS_AUTH=true — skip auth middleware (never use in production)
-	LogLevel           string // debug | info | warn | error  (default: info)
-	RateLimitRPS       int    // RATE_LIMIT_RPS — per-IP token bucket limit (default: 60)
-	TrustXFF           bool   // TRUST_XFF=true — honor X-Forwarded-For for rate limiting (only set when behind a known reverse proxy)
+	DatabaseURL        string  // DATABASE_URL — if non-empty, uses PostgreSQL instead of SQLite
+	DevBypassAuth      bool    // DEV_BYPASS_AUTH=true — skip auth middleware (never use in production)
+	LogLevel           string  // debug | info | warn | error  (default: info)
+	RateLimitRPS       int     // RATE_LIMIT_RPS — per-IP token bucket limit (default: 60)
+	TrustXFF           bool    // TRUST_XFF=true — honor X-Forwarded-For for rate limiting (only set when behind a known reverse proxy)
+	EnrichMinRelevance float64 // ENRICH_MIN_RELEVANCE — minimum relevance score for enrichment memories (default 0.30)
+	EnrichMaxMemories  int     // ENRICH_MAX_MEMORIES — max memories returned by enrichment (default 5)
 }
 
 // loadDotEnv reads KEY=VALUE lines from .env in the working directory and
@@ -169,6 +171,20 @@ func Load() (Config, error) {
 		rateLimitRPS = n
 	}
 
+	enrichMinRel := 0.30
+	if v := os.Getenv("ENRICH_MIN_RELEVANCE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			enrichMinRel = f
+		}
+	}
+
+	enrichMaxMem := 5
+	if v := os.Getenv("ENRICH_MAX_MEMORIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			enrichMaxMem = n
+		}
+	}
+
 	return Config{
 		DBPath:             envOrDefault("DATABASE_PATH", "knowledge.db"),
 		OllamaURL:          envOrDefault("OLLAMA_URL", "http://localhost:11434"),
@@ -197,6 +213,8 @@ func Load() (Config, error) {
 		LogLevel:           logLevel,
 		RateLimitRPS:       rateLimitRPS,
 		TrustXFF:           os.Getenv("TRUST_XFF") == "true",
+		EnrichMinRelevance: enrichMinRel,
+		EnrichMaxMemories:  enrichMaxMem,
 	}, nil
 }
 

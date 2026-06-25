@@ -216,6 +216,38 @@ func TestLoad_LogLevel_Default(t *testing.T) {
 	}
 }
 
+func TestConfig_EnrichEnvOverrides(t *testing.T) {
+	t.Setenv("ENRICH_MIN_RELEVANCE", "0.42")
+	t.Setenv("ENRICH_MAX_MEMORIES", "7")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.EnrichMinRelevance != 0.42 {
+		t.Errorf("EnrichMinRelevance = %v, want 0.42", cfg.EnrichMinRelevance)
+	}
+	if cfg.EnrichMaxMemories != 7 {
+		t.Errorf("EnrichMaxMemories = %d, want 7", cfg.EnrichMaxMemories)
+	}
+}
+
+func TestConfig_EnrichDefaults(t *testing.T) {
+	t.Setenv("ENRICH_MIN_RELEVANCE", "")
+	t.Setenv("ENRICH_MAX_MEMORIES", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.EnrichMinRelevance != 0.30 {
+		t.Errorf("EnrichMinRelevance default = %v, want 0.30", cfg.EnrichMinRelevance)
+	}
+	if cfg.EnrichMaxMemories != 5 {
+		t.Errorf("EnrichMaxMemories default = %d, want 5", cfg.EnrichMaxMemories)
+	}
+}
+
 func TestLoad_LogLevel_AllValid(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		t.Run(level, func(t *testing.T) {

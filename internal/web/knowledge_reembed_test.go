@@ -54,6 +54,8 @@ type stubEmbedProvider struct{}
 
 func (stubEmbedProvider) Embedder(_ string, _ string) embedding.Embedder { return stubEmbedder{} }
 
+func (stubEmbedProvider) OpenAIEmbedder(_, _, _ string) embedding.Embedder { return stubEmbedder{} }
+
 // reembedSettingsStore is a minimal aiconfig.SettingsStore returning empty
 // settings (no Ollama URL needed because the stub provider ignores them).
 type reembedSettingsStore struct{}
@@ -87,11 +89,12 @@ func newReembedStore(t *testing.T) (*storage.SQLiteStore, *sql.DB) {
 	return store, db
 }
 
-func newReembedSources() *aiconfig.Sources {
+func newReembedSources(ec aiconfig.EmbedConfigStore) *aiconfig.Sources {
 	r := aiconfig.NewResolver(reembedSettingsStore{}, aiconfig.EnvDefaults{})
 	return &aiconfig.Sources{
 		Resolver:    r,
 		Embed:       stubEmbedProvider{},
+		EmbedConfig: ec,
 		DefaultTeam: "test-team",
 	}
 }
@@ -104,7 +107,7 @@ func newReembedServer(t *testing.T, store storage.SQLiteStore) *web.Server {
 	var fsys fs.FS = staticFS
 	return web.NewServer(fsys, &store).
 		WithDevBypass(true).
-		WithAISources(newReembedSources())
+		WithAISources(newReembedSources(&store))
 }
 
 func chunkContents(t *testing.T, db *sql.DB, entryID string) []string {

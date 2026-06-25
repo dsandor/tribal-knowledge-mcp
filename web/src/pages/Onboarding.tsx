@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createTeam, createAPIKey, storeKnowledge } from '@/lib/api'
+import { createTeam, createAPIKey, storeKnowledge, getOnboardingStatus } from '@/lib/api'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
@@ -14,6 +14,7 @@ import Stepper from '@mui/material/Stepper'
 import Step from '@mui/material/Step'
 import StepLabel from '@mui/material/StepLabel'
 import LinearProgress from '@mui/material/LinearProgress'
+import CircularProgress from '@mui/material/CircularProgress'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
@@ -393,12 +394,48 @@ function StepSeedData({ onFinish }: { onFinish: () => void }) {
 export default function Onboarding() {
   const navigate = useNavigate()
   const [step, setStep] = useState(1)
+  const [checking, setChecking] = useState(true)
   const TOTAL_STEPS = 4
+
+  // Defensive guard: if the deployment no longer needs onboarding (a team
+  // exists, or the viewer isn't the first superadmin), bounce to the dashboard
+  // so nobody can get stuck here even if they land on the route directly.
+  const guardDoneRef = useRef(false)
+  useEffect(() => {
+    if (guardDoneRef.current) return
+    guardDoneRef.current = true
+    getOnboardingStatus()
+      .then(({ needs_onboarding }) => {
+        if (!needs_onboarding) {
+          navigate('/dashboard', { replace: true })
+          return
+        }
+        setChecking(false)
+      })
+      .catch(() => setChecking(false))
+  }, [navigate])
 
   const advance = () => setStep(s => s + 1)
   const finish = () => {
     localStorage.setItem('tkm_onboarding_done', '1')
     navigate('/dashboard', { replace: true })
+  }
+
+  if (checking) {
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          bgcolor: 'background.default',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          p: 3,
+        }}
+      >
+        <CircularProgress size={28} />
+      </Box>
+    )
   }
 
   return (

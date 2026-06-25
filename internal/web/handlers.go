@@ -724,8 +724,11 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 		teamID := existing.TeamID
 		embedder := s.aiSrc.Embedder(ctx, teamID)
 		if embedder == nil {
-			slog.Info("knowledge update: re-embed skipped, embedding not configured", "id", id, "team", teamID)
-			writeJSON(w, map[string]any{"ok": true})
+			// Fail-soft: the entry text is already saved by UpdateEntry above.
+			// A missing embedder must not 500 — the edit still persists; only
+			// the stale vectors are left untouched.
+			slog.Warn("knowledge update: embedding skipped", "id", id, "err", "embedding not configured")
+			writeJSON(w, map[string]any{"ok": true, "embedding_skipped": true})
 			return
 		}
 		cfg := s.aiSrc.ChunkConfig(ctx, teamID)
@@ -734,8 +737,9 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 		for _, c := range chunks {
 			emb, err := embedder.Embed(ctx, c.Content)
 			if err != nil {
-				slog.Error("knowledge update: re-embed failed", "id", id, "team", teamID, "chunk", c.Index, "err", err)
-				writeError(w, 500, "internal_error", fmt.Sprintf("re-embed content: %v", err))
+				// Fail-soft: text is committed; skip vectors rather than 500.
+				slog.Warn("knowledge update: embedding skipped", "id", id, "err", err)
+				writeJSON(w, map[string]any{"ok": true, "embedding_skipped": true})
 				return
 			}
 			entryChunks = append(entryChunks, storage.EntryChunk{
@@ -750,8 +754,9 @@ func (s *Server) handleKnowledgeUpdate(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 404, "not_found", "entry not found")
 				return
 			}
-			slog.Error("knowledge update: replace chunks failed", "id", id, "team", teamID, "err", err)
-			writeError(w, 500, "internal_error", fmt.Sprintf("replace entry chunks: %v", err))
+			// Fail-soft: text is committed; a chunk-replace failure must not 500.
+			slog.Warn("knowledge update: embedding skipped", "id", id, "err", err)
+			writeJSON(w, map[string]any{"ok": true, "embedding_skipped": true})
 			return
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dsandor/memory/internal/aiconfig"
+	"github.com/dsandor/memory/internal/enrich"
 	"github.com/dsandor/memory/internal/llm"
 	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/storage"
@@ -96,7 +97,7 @@ func TestEnrichmentTouchpointRouting(t *testing.T) {
 
 	t.Run("enrich_context", func(t *testing.T) {
 		src, rec := newTouchpointSources(saved, env, embedder)
-		handler := internalmcp.HandleEnrichContext(store, src, nil)
+		handler := internalmcp.HandleEnrichContext(store, src, nil, enrich.EnrichDefaults{})
 		req := callReq("prompt", "analyze quarterly earnings in detail please")
 
 		result, err := handler(context.Background(), req)

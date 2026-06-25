@@ -637,6 +637,72 @@ func (s *PostgresStore) ReassignEntriesTeam(ctx context.Context, entryIDs []stri
 	return tx.Commit()
 }
 
+// RebuildEmbeddingColumns drops and recreates the pgvector tables (embeddings
+// and chunk_embeddings) at newDim, discarding all stored vectors. The text
+// table entry_chunks is preserved. On success s.embeddingDim is set to newDim.
+// A single admin action invokes this; concurrent embedding writes during the
+// rebuild are not expected, so no mutex is taken.
+func (s *PostgresStore) RebuildEmbeddingColumns(ctx context.Context, newDim int) error {
+	if newDim <= 0 {
+		return fmt.Errorf("rebuild embedding columns: invalid dimension %d", newDim)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Drop the vector tables only. entry_chunks (text) is intentionally kept;
+	// chunk_embeddings references it and is recreated empty below.
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS chunk_embeddings`); err != nil {
+		return fmt.Errorf("drop chunk_embeddings: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS embeddings`); err != nil {
+		return fmt.Errorf("drop embeddings: %w", err)
+	}
+
+	// Recreate embeddings (per-entry vectors) at the new dimension, mirroring
+	// the original CREATE in migrate().
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE embeddings (
+			entry_id  TEXT PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+			embedding vector(%d) NOT NULL
+		)
+	`, newDim)); err != nil {
+		return fmt.Errorf("recreate embeddings table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS embeddings_cosine_idx
+		ON embeddings USING ivfflat (embedding vector_cosine_ops)
+		WITH (lists = 100)
+	`); err != nil {
+		return fmt.Errorf("recreate embeddings index: %w", err)
+	}
+
+	// Recreate chunk_embeddings (per-chunk vectors) at the new dimension.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE chunk_embeddings (
+			chunk_id  BIGINT PRIMARY KEY REFERENCES entry_chunks(id) ON DELETE CASCADE,
+			embedding vector(%d) NOT NULL
+		)
+	`, newDim)); err != nil {
+		return fmt.Errorf("recreate chunk_embeddings table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS chunk_embeddings_cosine_idx
+		ON chunk_embeddings USING ivfflat (embedding vector_cosine_ops)
+		WITH (lists = 100)
+	`); err != nil {
+		return fmt.Errorf("recreate chunk_embeddings index: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rebuild embedding columns: %w", err)
+	}
+	s.embeddingDim = newDim
+	return nil
+}
+
 func (s *PostgresStore) UpdateAutoTags(ctx context.Context, id string, tags []string) error {
 	autoTagsJSON, err := json.Marshal(tags)
 	if err != nil {

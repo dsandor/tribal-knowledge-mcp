@@ -4,6 +4,10 @@ import {
   putSettings,
   fetchModelOptions,
   importEnvSettings,
+  getMe,
+  getEmbeddingConfig,
+  putEmbeddingConfig,
+  reembedAll,
   type AISettings,
   type AIFieldValue,
   type AITouchpoint,
@@ -27,7 +31,22 @@ import MenuItem from '@mui/material/MenuItem';
 import InputLabel from '@mui/material/InputLabel';
 import FormControl from '@mui/material/FormControl';
 import FormHelperText from '@mui/material/FormHelperText';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogActions from '@mui/material/DialogActions';
 import BackupRestore from '../components/BackupRestore';
+
+interface EmbeddingConfig {
+  provider: string;
+  model: string;
+  openai_api_key: string;
+  openai_base_url: string;
+  ollama_url: string;
+  current_dimension: number;
+  model_dimension: number;
+}
 
 interface TeamSettings {
   team_id?: string;
@@ -140,6 +159,51 @@ export default function Settings() {
   // AI effective settings (may be absent on older servers).
   const [ai, setAi] = useState<AISettings | null>(null);
 
+  // ── Embeddings (superadmin-only) ──
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
+  const [embCfg, setEmbCfg] = useState<EmbeddingConfig | null>(null);
+  // Editable form state for the embedding config.
+  const [embProvider, setEmbProvider] = useState('openai');
+  const [embModel, setEmbModel] = useState('');
+  const [embBaseURL, setEmbBaseURL] = useState('https://api.openai.com');
+  const [embOllamaURL, setEmbOllamaURL] = useState('');
+  // OpenAI key handling — mirror the anthropic keyDraft pattern.
+  const [embHasStoredKey, setEmbHasStoredKey] = useState(false);
+  const [embKeyDraft, setEmbKeyDraft] = useState('');
+  const [embSaving, setEmbSaving] = useState(false);
+  const [embSaved, setEmbSaved] = useState(false);
+  const [embError, setEmbError] = useState<string | null>(null);
+  // Re-embed flow.
+  const [reembedConfirmOpen, setReembedConfirmOpen] = useState(false);
+  const [reembedding, setReembedding] = useState(false);
+  const [reembedResult, setReembedResult] = useState<string | null>(null);
+
+  const applyEmbConfig = (cfg: EmbeddingConfig) => {
+    setEmbCfg(cfg);
+    setEmbProvider(cfg.provider || 'openai');
+    setEmbModel(cfg.model || '');
+    setEmbBaseURL(cfg.openai_base_url || 'https://api.openai.com');
+    setEmbOllamaURL(cfg.ollama_url || '');
+    // Backend masks a stored key as the literal "stored".
+    if (cfg.openai_api_key === 'stored') {
+      setEmbHasStoredKey(true);
+    } else if (cfg.openai_api_key) {
+      setEmbHasStoredKey(true);
+    } else {
+      setEmbHasStoredKey(false);
+    }
+    setEmbKeyDraft('');
+  };
+
+  const loadEmbeddingConfig = async () => {
+    try {
+      const cfg = (await getEmbeddingConfig()) as EmbeddingConfig;
+      applyEmbConfig(cfg);
+    } catch (e) {
+      setEmbError(e instanceof Error ? e.message : 'Failed to load embedding config.');
+    }
+  };
+
   // Model options for dropdowns.
   const [models, setModels] = useState<ModelOptions>({
     anthropic: [],
@@ -188,6 +252,22 @@ export default function Settings() {
 
   useEffect(() => {
     loadAll().finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Determine superadmin status and, if so, load the embedding config.
+  useEffect(() => {
+    (async () => {
+      try {
+        const me = await getMe();
+        if (me.role === 'superadmin') {
+          setIsSuperadmin(true);
+          await loadEmbeddingConfig();
+        }
+      } catch {
+        // Not superadmin / not authenticated — leave the section hidden.
+      }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -246,6 +326,62 @@ export default function Settings() {
 
     setImportSuccess(true);
     setTimeout(() => setImportSuccess(false), 2000);
+  };
+
+  // ── Embeddings handlers ──
+  const handleSaveEmbedding = async () => {
+    setEmbSaving(true);
+    setEmbError(null);
+    try {
+      const payload: {
+        provider: string;
+        model: string;
+        openai_api_key?: string;
+        openai_base_url: string;
+        ollama_url: string;
+      } = {
+        provider: embProvider,
+        model: embModel.trim(),
+        openai_base_url: embBaseURL.trim() || 'https://api.openai.com',
+        ollama_url: embOllamaURL.trim(),
+      };
+      // Only send a key when the user typed a new one; otherwise send "stored"
+      // so the backend preserves the existing key.
+      if (embKeyDraft.trim()) {
+        payload.openai_api_key = embKeyDraft.trim();
+      } else if (embHasStoredKey) {
+        payload.openai_api_key = 'stored';
+      }
+      await putEmbeddingConfig(payload);
+      setEmbKeyDraft('');
+      setEmbSaved(true);
+      setTimeout(() => setEmbSaved(false), 2000);
+      // Re-fetch to refresh masked key + dimension info.
+      await loadEmbeddingConfig();
+    } catch (e) {
+      setEmbError(e instanceof Error ? e.message : 'Failed to save embedding config.');
+    } finally {
+      setEmbSaving(false);
+    }
+  };
+
+  const handleReembed = async () => {
+    setReembedConfirmOpen(false);
+    setReembedding(true);
+    setEmbError(null);
+    setReembedResult(null);
+    try {
+      const res = await reembedAll();
+      setReembedResult(
+        `Re-embedded ${res.reembedded}, skipped ${res.skipped}, dimension ${res.dimension}`
+      );
+      // Refresh dimension info after the rebuild.
+      await loadEmbeddingConfig();
+    } catch (e) {
+      setEmbError(e instanceof Error ? e.message : 'Re-embed failed.');
+    } finally {
+      setReembedding(false);
+    }
   };
 
   // Resolve a string-or-ModelOption value from Autocomplete freeSolo.
@@ -719,6 +855,170 @@ export default function Settings() {
           {saving ? 'Saving...' : 'Save Settings'}
         </Button>
       </Box>
+
+      {/* Embeddings (superadmin only — deployment-wide) */}
+      {isSuperadmin && (
+        <>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, mt: 4 }}>
+            Embeddings
+          </Typography>
+          <Card sx={{ mb: 3 }}>
+            <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <Typography variant="body2" color="text.secondary">
+                Deployment-wide embedding provider and model. Changing the model
+                may change the vector dimension; use “Re-embed all entries” to
+                rebuild vectors when the dimension differs.
+              </Typography>
+
+              {embError && (
+                <Alert severity="error" onClose={() => setEmbError(null)}>
+                  {embError}
+                </Alert>
+              )}
+
+              {/* Provider */}
+              <FormControl fullWidth>
+                <InputLabel id="emb-provider-label">Provider</InputLabel>
+                <Select
+                  labelId="emb-provider-label"
+                  label="Provider"
+                  value={embProvider}
+                  onChange={e => setEmbProvider(e.target.value)}
+                >
+                  <MenuItem value="openai">OpenAI</MenuItem>
+                  <MenuItem value="ollama">Ollama</MenuItem>
+                </Select>
+                <FormHelperText>
+                  Selects which embedding backend produces vectors for knowledge search.
+                </FormHelperText>
+              </FormControl>
+
+              {/* Model */}
+              <TextField
+                label="Embedding Model"
+                fullWidth
+                value={embModel}
+                onChange={e => setEmbModel(e.target.value)}
+                placeholder={embProvider === 'ollama' ? 'nomic-embed-text' : 'text-embedding-3-small'}
+                helperText={
+                  embProvider === 'ollama'
+                    ? 'Ollama embedding model name (e.g. nomic-embed-text).'
+                    : 'Common OpenAI models: text-embedding-3-small (1536), text-embedding-3-large (3072), text-embedding-ada-002 (1536).'
+                }
+              />
+
+              {/* OpenAI fields */}
+              {embProvider === 'openai' && (
+                <>
+                  <TextField
+                    label="OpenAI API Key"
+                    type="password"
+                    fullWidth
+                    value={embKeyDraft}
+                    onChange={e => setEmbKeyDraft(e.target.value)}
+                    placeholder={embHasStoredKey ? '••••••••  (stored — type to replace)' : 'sk-...'}
+                    helperText={
+                      embHasStoredKey
+                        ? 'A key is already stored. Type a new one to replace it, or leave blank to keep the existing key.'
+                        : 'Your OpenAI API key. Stored server-side.'
+                    }
+                  />
+
+                  <TextField
+                    label="OpenAI Base URL"
+                    fullWidth
+                    value={embBaseURL}
+                    onChange={e => setEmbBaseURL(e.target.value)}
+                    placeholder="https://api.openai.com"
+                    helperText="Override for OpenAI-compatible endpoints. Defaults to https://api.openai.com."
+                  />
+                </>
+              )}
+
+              {/* Ollama fields */}
+              {embProvider === 'ollama' && (
+                <TextField
+                  label="Ollama URL"
+                  fullWidth
+                  value={embOllamaURL}
+                  onChange={e => setEmbOllamaURL(e.target.value)}
+                  placeholder="http://localhost:11434"
+                  helperText="Base URL of the Ollama server used for embeddings."
+                />
+              )}
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Button variant="contained" onClick={handleSaveEmbedding} disabled={embSaving}>
+                  {embSaving ? 'Saving...' : 'Save Embeddings'}
+                </Button>
+                {embSaved && (
+                  <Typography variant="caption" color="success.main">Saved</Typography>
+                )}
+              </Box>
+
+              <Divider />
+
+              {/* Dimension status + re-embed */}
+              {embCfg && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'text.secondary' }}>
+                    Vector Dimension
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Current vector columns: <strong>{embCfg.current_dimension}</strong>
+                    {' · '}
+                    Configured model: <strong>{embCfg.model_dimension > 0 ? embCfg.model_dimension : 'unknown'}</strong>
+                  </Typography>
+
+                  {embCfg.model_dimension > 0 && embCfg.model_dimension !== embCfg.current_dimension && (
+                    <Alert severity="warning">
+                      Model dimension {embCfg.model_dimension} differs from the current
+                      vector columns ({embCfg.current_dimension}). Re-embedding will
+                      rebuild all vectors.
+                    </Alert>
+                  )}
+
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Button
+                      variant="outlined"
+                      color="warning"
+                      onClick={() => setReembedConfirmOpen(true)}
+                      disabled={reembedding}
+                    >
+                      {reembedding ? 'Re-embedding…' : 'Re-embed all entries'}
+                    </Button>
+                    {reembedding && <CircularProgress size={18} />}
+                  </Box>
+
+                  {reembedResult && (
+                    <Alert severity="success" onClose={() => setReembedResult(null)}>
+                      {reembedResult}
+                    </Alert>
+                  )}
+                </Box>
+              )}
+            </CardContent>
+          </Card>
+
+          <Dialog open={reembedConfirmOpen} onClose={() => setReembedConfirmOpen(false)}>
+            <DialogTitle>Re-embed all entries?</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                This will rebuild vectors for every entry across all teams using the
+                configured embedding provider and model. If the model dimension differs
+                from the current columns, the vector columns will be rebuilt first.
+                This may take a while and cannot be undone.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setReembedConfirmOpen(false)}>Cancel</Button>
+              <Button onClick={handleReembed} color="warning" variant="contained" autoFocus>
+                Re-embed
+              </Button>
+            </DialogActions>
+          </Dialog>
+        </>
+      )}
 
       {/* Backup & Restore (superadmin only — enforced server-side) */}
       <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1.5, mt: 4 }}>

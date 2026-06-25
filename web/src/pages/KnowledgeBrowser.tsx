@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, copyKnowledge, getMe, getMyTeams, moveKnowledge, setEntryAuthor, type KnowledgeEntry } from '@/lib/api'
-import { Check, ChevronLeft, ChevronRight, Pencil, Search, Tag, X } from 'lucide-react'
+import { api, copyKnowledge, getMe, getMyTeams, moveKnowledge, pinEntry, setEntryAuthor, type KnowledgeEntry } from '@/lib/api'
+import { Check, ChevronLeft, ChevronRight, Pencil, Pin, Search, Tag, X } from 'lucide-react'
 import { TagPill } from '@/components/ui/tag-pill'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -223,6 +223,15 @@ export default function KnowledgeBrowser() {
       setBulkError(e instanceof Error ? e.message : 'Set author failed.')
     } finally {
       setAuthorSaving(false)
+    }
+  }
+
+  const handlePin = async (id: string) => {
+    try {
+      await pinEntry(id)
+      setToast('Pinned to enrichment')
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Pin failed.')
     }
   }
 
@@ -517,7 +526,16 @@ export default function KnowledgeBrowser() {
                       </Typography>
                     )}
                   </Box>
-                  <Chip label={e.Type} size="small" sx={{ flexShrink: 0 }} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+                    <IconButton
+                      size="small"
+                      title="Pin to enrichment"
+                      onClick={ev => { ev.preventDefault(); ev.stopPropagation(); handlePin(e.ID) }}
+                    >
+                      <Pin style={{ width: 14, height: 14 }} />
+                    </IconButton>
+                    <Chip label={e.Type} size="small" />
+                  </Box>
                 </CardContent>
               </Card>
             )

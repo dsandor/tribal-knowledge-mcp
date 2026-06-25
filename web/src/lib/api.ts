@@ -334,6 +334,15 @@ export async function getMe(): Promise<{ user_id: string; team_id: string; role:
   return r.json();
 }
 
+// Whether the current deployment still needs first-run onboarding (the first
+// superadmin creating the first real team). The server is authoritative: it
+// returns true only for a superadmin on a deployment with no real team yet.
+export async function getOnboardingStatus(): Promise<{ needs_onboarding: boolean }> {
+  const r = await apiFetch('/api/onboarding-status');
+  if (!r.ok) throw new Error('fetch onboarding status failed');
+  return r.json();
+}
+
 // --- Active team (multi-team membership) ---
 // The teams the current user belongs to, plus the server's notion of the active team.
 export async function getMyTeams(): Promise<{ teams: { id: string; name: string }[]; active_team: string }> {
@@ -632,6 +641,42 @@ export async function putAuthConfig(config: object) {
   return r.json();
 }
 
+// --- Embedding config (superadmin) ---
+export async function getEmbeddingConfig(): Promise<{
+  provider: string;
+  model: string;
+  openai_api_key: string;
+  openai_base_url: string;
+  ollama_url: string;
+  current_dimension: number;
+  model_dimension: number;
+}> {
+  const r = await apiFetch('/api/admin/embedding-config');
+  if (!r.ok) throw new Error('fetch embedding config failed');
+  return r.json();
+}
+
+export async function putEmbeddingConfig(cfg: {
+  provider: string;
+  model: string;
+  openai_api_key?: string;
+  openai_base_url: string;
+  ollama_url: string;
+}): Promise<void> {
+  const r = await apiFetch('/api/admin/embedding-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!r.ok) throw new Error('put embedding config failed');
+}
+
+export async function reembedAll(): Promise<{ reembedded: number; skipped: number; dimension: number }> {
+  const r = await apiFetch('/api/admin/reembed', { method: 'POST' });
+  if (!r.ok) throw new Error('reembed failed');
+  return r.json();
+}
+
 // --- Pipeline ---
 export async function fetchPipelineRuns(limit = 20): Promise<PipelineStatus[]> {
   const r = await apiFetch(`/api/pipeline/runs?limit=${limit}`)
@@ -861,4 +906,85 @@ export async function deleteVisibilityRule(rule_type: VisibilityRuleType, value:
     body: JSON.stringify({ rule_type, value }),
   });
   if (!r.ok) throw new Error('delete visibility rule failed');
+}
+
+// --- Per-user enrichment tuning ---
+// Saved enrichment preferences for the current user, with deployment defaults
+// applied to any unset scalar. The `*_default` booleans are true when the
+// corresponding scalar is using the deployment default (i.e. not a per-user
+// override), so the UI can show a "(default)" hint.
+export interface EnrichmentPrefs {
+  min_relevance: number
+  max_memories: number
+  llm_rewrite: boolean
+  min_relevance_default: boolean
+  max_memories_default: boolean
+  llm_rewrite_default: boolean
+  defaults: { min_relevance: number; max_memories: number }
+  allow_domains: string[]
+  deny_domains: string[]
+  allow_tags: string[]
+  deny_tags: string[]
+  pinned_entries: string[]
+}
+
+// Input for PUT/preview override. Scalars are optional: null/omitted reverts the
+// scalar to the deployment default. The five list fields replace the saved lists.
+export interface EnrichmentPrefsInput {
+  min_relevance?: number | null
+  max_memories?: number | null
+  llm_rewrite?: boolean | null
+  allow_domains: string[]
+  deny_domains: string[]
+  allow_tags: string[]
+  deny_tags: string[]
+  pinned_entries: string[]
+}
+
+export interface EnrichmentPreview {
+  included: { id: string; title: string; domain: string; relevance: number; pinned: boolean }[]
+  excluded: { id: string; title: string; domain: string; relevance: number; reason: string }[]
+  applicable_rules: { id: string; title: string; content: string; scope: string }[]
+  improved_prompt: string
+}
+
+// Load the current user's enrichment preferences (with defaults applied).
+export async function getEnrichmentPrefs(): Promise<EnrichmentPrefs> {
+  const r = await apiFetch('/api/enrichment/prefs')
+  if (!r.ok) throw new Error('fetch enrichment prefs failed')
+  return r.json()
+}
+
+// Persist enrichment preferences. Returns the refreshed prefs (same shape as GET).
+export async function putEnrichmentPrefs(p: EnrichmentPrefsInput): Promise<EnrichmentPrefs> {
+  const r = await apiFetch('/api/enrichment/prefs', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  })
+  if (!r.ok) throw new Error('put enrichment prefs failed')
+  return r.json()
+}
+
+// Preview enrichment for a prompt. Pass `prefsOverride` to test unsaved settings.
+export async function previewEnrichment(prompt: string, prefsOverride?: EnrichmentPrefsInput): Promise<EnrichmentPreview> {
+  const r = await apiFetch('/api/enrichment/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, prefs_override: prefsOverride }),
+  })
+  if (!r.ok) throw new Error('preview enrichment failed')
+  return r.json()
+}
+
+// Pin a knowledge entry so it is forced into enrichment results.
+export async function pinEntry(id: string): Promise<void> {
+  const r = await apiFetch(`/api/enrichment/pins/${id}`, { method: 'POST' })
+  if (!r.ok) throw new Error('pin entry failed')
+}
+
+// Remove a pinned knowledge entry.
+export async function unpinEntry(id: string): Promise<void> {
+  const r = await apiFetch(`/api/enrichment/pins/${id}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error('unpin entry failed')
 }

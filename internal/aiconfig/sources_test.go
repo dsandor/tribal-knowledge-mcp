@@ -3,10 +3,12 @@ package aiconfig
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/dsandor/memory/internal/embedding"
 	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
 )
@@ -369,4 +371,129 @@ func TestLLMUnconfiguredWarns(t *testing.T) {
 	if !strings.Contains(log, "team=t1") {
 		t.Errorf("expected team=t1 in log, got: %s", log)
 	}
+}
+
+// --- Embedder provider-selection test doubles ---
+
+type stubEmbedder struct{}
+
+func (stubEmbedder) Embed(_ context.Context, _ string) ([]float32, error) { return nil, nil }
+func (stubEmbedder) Ping(_ context.Context) error                         { return nil }
+
+// recordingEmbedProvider records which accessor was called and with what args.
+type recordingEmbedProvider struct {
+	ollamaCalls []string // "url|model"
+	openAICalls []string // "baseURL|apiKey|model"
+}
+
+func (r *recordingEmbedProvider) Embedder(url, model string) embedding.Embedder {
+	r.ollamaCalls = append(r.ollamaCalls, url+"|"+model)
+	return stubEmbedder{}
+}
+
+func (r *recordingEmbedProvider) OpenAIEmbedder(baseURL, apiKey, model string) embedding.Embedder {
+	r.openAICalls = append(r.openAICalls, baseURL+"|"+apiKey+"|"+model)
+	return stubEmbedder{}
+}
+
+// fakeEmbedConfigStore returns a configurable embedding config (or error).
+type fakeEmbedConfigStore struct {
+	cfg *storage.EmbeddingConfig
+	err error
+}
+
+func (f *fakeEmbedConfigStore) GetEmbeddingConfig(_ context.Context) (*storage.EmbeddingConfig, error) {
+	return f.cfg, f.err
+}
+
+// TestEmbedderOpenAI: provider "openai" routes to OpenAIEmbedder with the
+// config's base URL, API key, and model.
+func TestEmbedderOpenAI(t *testing.T) {
+	rec := &recordingEmbedProvider{}
+	src := &Sources{
+		Embed: rec,
+		EmbedConfig: &fakeEmbedConfigStore{cfg: &storage.EmbeddingConfig{
+			Provider:      "openai",
+			Model:         "text-embedding-3-small",
+			OpenAIAPIKey:  "sk-test",
+			OpenAIBaseURL: "https://api.openai.com",
+			OllamaURL:     "http://o", // must be ignored for openai
+		}},
+	}
+	e := src.Embedder(context.Background(), "any-team")
+	if e == nil {
+		t.Fatal("expected non-nil embedder for provider=openai")
+	}
+	if len(rec.openAICalls) != 1 || rec.openAICalls[0] != "https://api.openai.com|sk-test|text-embedding-3-small" {
+		t.Fatalf("openai calls = %v", rec.openAICalls)
+	}
+	if len(rec.ollamaCalls) != 0 {
+		t.Fatalf("ollama must not be called for openai: %v", rec.ollamaCalls)
+	}
+}
+
+// TestEmbedderOllama: provider "ollama" routes to Embedder with the config's
+// Ollama URL and model.
+func TestEmbedderOllama(t *testing.T) {
+	rec := &recordingEmbedProvider{}
+	src := &Sources{
+		Embed: rec,
+		EmbedConfig: &fakeEmbedConfigStore{cfg: &storage.EmbeddingConfig{
+			Provider:      "ollama",
+			Model:         "nomic-embed",
+			OllamaURL:     "http://ollama:11434",
+			OpenAIBaseURL: "https://api.openai.com", // must be ignored for ollama
+			OpenAIAPIKey:  "sk-ignored",
+		}},
+	}
+	e := src.Embedder(context.Background(), "any-team")
+	if e == nil {
+		t.Fatal("expected non-nil embedder for provider=ollama")
+	}
+	if len(rec.ollamaCalls) != 1 || rec.ollamaCalls[0] != "http://ollama:11434|nomic-embed" {
+		t.Fatalf("ollama calls = %v", rec.ollamaCalls)
+	}
+	if len(rec.openAICalls) != 0 {
+		t.Fatalf("openai must not be called for ollama: %v", rec.openAICalls)
+	}
+}
+
+// TestEmbedderNilOrErrorConfig: a nil config, a read error, an unknown provider,
+// and a nil EmbedConfig source all yield a nil embedder (fail-soft) without
+// touching the EmbedProvider.
+func TestEmbedderNilOrErrorConfig(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		rec := &recordingEmbedProvider{}
+		src := &Sources{Embed: rec, EmbedConfig: &fakeEmbedConfigStore{cfg: nil}}
+		if e := src.Embedder(context.Background(), "t"); e != nil {
+			t.Fatalf("expected nil embedder for nil config, got %v", e)
+		}
+		if len(rec.ollamaCalls)+len(rec.openAICalls) != 0 {
+			t.Fatalf("provider must not be called: ollama=%v openai=%v", rec.ollamaCalls, rec.openAICalls)
+		}
+	})
+	t.Run("read error", func(t *testing.T) {
+		rec := &recordingEmbedProvider{}
+		src := &Sources{Embed: rec, EmbedConfig: &fakeEmbedConfigStore{err: errors.New("boom")}}
+		if e := src.Embedder(context.Background(), "t"); e != nil {
+			t.Fatalf("expected nil embedder on read error, got %v", e)
+		}
+	})
+	t.Run("unknown provider", func(t *testing.T) {
+		rec := &recordingEmbedProvider{}
+		src := &Sources{Embed: rec, EmbedConfig: &fakeEmbedConfigStore{cfg: &storage.EmbeddingConfig{Provider: "mystery"}}}
+		if e := src.Embedder(context.Background(), "t"); e != nil {
+			t.Fatalf("expected nil embedder for unknown provider, got %v", e)
+		}
+		if len(rec.ollamaCalls)+len(rec.openAICalls) != 0 {
+			t.Fatalf("provider must not be called for unknown provider")
+		}
+	})
+	t.Run("nil EmbedConfig source", func(t *testing.T) {
+		rec := &recordingEmbedProvider{}
+		src := &Sources{Embed: rec} // EmbedConfig intentionally nil
+		if e := src.Embedder(context.Background(), "t"); e != nil {
+			t.Fatalf("expected nil embedder when EmbedConfig is nil, got %v", e)
+		}
+	})
 }

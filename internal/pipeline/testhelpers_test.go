@@ -235,6 +235,9 @@ func (m *mockAnalysisStore) BackfillTeamID(_ context.Context, _ string) error { 
 func (m *mockAnalysisStore) ReassignEntriesTeam(_ context.Context, _ []string, _ string) error {
 	return nil
 }
+func (m *mockAnalysisStore) RebuildEmbeddingColumns(_ context.Context, _ int) error {
+	return nil
+}
 func (m *mockAnalysisStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {
 	return storage.VisibilityRule{}, nil
 }

@@ -26,6 +26,28 @@ func (s *PostgresStore) migrateVisibility(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_uvr_user ON user_visibility_rules(user_id)`); err != nil {
 		return fmt.Errorf("create idx_uvr_user index: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS enrichment_prefs (
+			user_id       TEXT PRIMARY KEY,
+			min_relevance DOUBLE PRECISION,
+			max_memories  INTEGER,
+			llm_rewrite   INTEGER,
+			updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("create enrichment_prefs table: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS enrichment_rules (
+			user_id    TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			value      TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, kind, value)
+		)
+	`); err != nil {
+		return fmt.Errorf("create enrichment_rules table: %w", err)
+	}
 	return nil
 }
 

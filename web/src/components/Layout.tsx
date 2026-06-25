@@ -11,6 +11,7 @@ import Typography from '@mui/material/Typography'
 import {
   LayoutDashboard, BookOpen, Upload, Network, Database,
   Bot, BarChart2, Clock, Settings, Users, ShieldCheck, Activity,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { Psychology as BrainIcon } from '@mui/icons-material'
 import { getMe } from '@/lib/api'
@@ -28,6 +29,7 @@ const baseNav = [
   { to: '/datasets', label: 'Datasets', Icon: Database },
   { to: '/agents', label: 'Agents', Icon: Bot },
   { to: '/analytics', label: 'Analytics', Icon: BarChart2 },
+  { to: '/enrichment', label: 'Enrichment', Icon: SlidersHorizontal },
   { to: '/pending', label: 'Pending Queue', Icon: Clock },
 ]
 

@@ -929,3 +929,145 @@ func TestTeamMemberships(t *testing.T) {
 		t.Fatal("should not be a member of B after remove")
 	}
 }
+
+func TestEmbeddingConfig(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	// Fresh store should return the seeded default.
+	cfg, err := s.GetEmbeddingConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetEmbeddingConfig: %v", err)
+	}
+	if cfg.Provider != "openai" {
+		t.Errorf("default provider = %q, want openai", cfg.Provider)
+	}
+	if cfg.Model != "text-embedding-3-small" {
+		t.Errorf("default model = %q, want text-embedding-3-small", cfg.Model)
+	}
+	if cfg.OpenAIBaseURL != "https://api.openai.com" {
+		t.Errorf("default base url = %q, want https://api.openai.com", cfg.OpenAIBaseURL)
+	}
+	if cfg.Dimension != s.embeddingDim {
+		t.Errorf("default dimension = %d, want %d", cfg.Dimension, s.embeddingDim)
+	}
+
+	// Put then Get round-trips.
+	put := EmbeddingConfig{
+		Provider:      "ollama",
+		Model:         "nomic-embed-text",
+		OpenAIAPIKey:  "sk-test",
+		OpenAIBaseURL: "https://example.com",
+		OllamaURL:     "http://localhost:11434",
+		Dimension:     768,
+	}
+	if err := s.PutEmbeddingConfig(ctx, put); err != nil {
+		t.Fatalf("PutEmbeddingConfig: %v", err)
+	}
+	got, err := s.GetEmbeddingConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetEmbeddingConfig after put: %v", err)
+	}
+	if got.Provider != "ollama" || got.Model != "nomic-embed-text" ||
+		got.OpenAIAPIKey != "sk-test" || got.OpenAIBaseURL != "https://example.com" ||
+		got.OllamaURL != "http://localhost:11434" || got.Dimension != 768 {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+	if got.UpdatedAt.IsZero() {
+		t.Error("UpdatedAt should be set after Put")
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestEnrichmentPrefs(t *testing.T) {
+	s := newTestStoreInternal(t)
+	ctx := context.Background()
+
+	// Fresh store: no row yet → all *Set flags false, empty rule lists.
+	p, err := s.GetEnrichmentPrefs(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetEnrichmentPrefs (fresh): %v", err)
+	}
+	if p.MinRelevanceSet || p.MaxMemoriesSet || p.LLMRewriteSet {
+		t.Errorf("fresh prefs should have all *Set false, got %+v", p)
+	}
+	if len(p.AllowDomains) != 0 || len(p.DenyDomains) != 0 || len(p.AllowTags) != 0 ||
+		len(p.DenyTags) != 0 || len(p.PinnedEntries) != 0 {
+		t.Errorf("fresh prefs should have empty rule lists, got %+v", p)
+	}
+
+	// Put scalars → Get reflects values and *Set true.
+	if err := s.PutEnrichmentPrefs(ctx, "u1", ptr(0.5), ptr(3), ptr(false)); err != nil {
+		t.Fatalf("PutEnrichmentPrefs: %v", err)
+	}
+	p, err = s.GetEnrichmentPrefs(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetEnrichmentPrefs after put: %v", err)
+	}
+	if !p.MinRelevanceSet || p.MinRelevance != 0.5 {
+		t.Errorf("MinRelevance = %v (set=%v), want 0.5 set", p.MinRelevance, p.MinRelevanceSet)
+	}
+	if !p.MaxMemoriesSet || p.MaxMemories != 3 {
+		t.Errorf("MaxMemories = %v (set=%v), want 3 set", p.MaxMemories, p.MaxMemoriesSet)
+	}
+	if !p.LLMRewriteSet || p.LLMRewrite != false {
+		t.Errorf("LLMRewrite = %v (set=%v), want false set", p.LLMRewrite, p.LLMRewriteSet)
+	}
+
+	// ReplaceEnrichmentRules for deny_domain.
+	if err := s.ReplaceEnrichmentRules(ctx, "u1", "deny_domain", []string{"legal", "hr"}); err != nil {
+		t.Fatalf("ReplaceEnrichmentRules: %v", err)
+	}
+	p, err = s.GetEnrichmentPrefs(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetEnrichmentPrefs after replace: %v", err)
+	}
+	if !equalSlice(p.DenyDomains, []string{"hr", "legal"}) {
+		t.Errorf("DenyDomains = %v, want [hr legal] (any order)", p.DenyDomains)
+	}
+
+	// AddEnrichmentRule pin_entry.
+	if err := s.AddEnrichmentRule(ctx, "u1", "pin_entry", "e1"); err != nil {
+		t.Fatalf("AddEnrichmentRule: %v", err)
+	}
+	p, err = s.GetEnrichmentPrefs(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetEnrichmentPrefs after add: %v", err)
+	}
+	if !equalSlice(p.PinnedEntries, []string{"e1"}) {
+		t.Errorf("PinnedEntries = %v, want [e1]", p.PinnedEntries)
+	}
+
+	// RemoveEnrichmentRule deny_domain hr → [legal].
+	if err := s.RemoveEnrichmentRule(ctx, "u1", "deny_domain", "hr"); err != nil {
+		t.Fatalf("RemoveEnrichmentRule: %v", err)
+	}
+	p, err = s.GetEnrichmentPrefs(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetEnrichmentPrefs after remove: %v", err)
+	}
+	if !equalSlice(p.DenyDomains, []string{"legal"}) {
+		t.Errorf("DenyDomains = %v, want [legal]", p.DenyDomains)
+	}
+}
+
+// equalSlice reports whether a and b contain the same elements regardless of order.
+func equalSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := map[string]int{}
+	for _, v := range a {
+		m[v]++
+	}
+	for _, v := range b {
+		m[v]--
+	}
+	for _, n := range m {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}

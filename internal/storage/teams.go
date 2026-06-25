@@ -85,12 +85,44 @@ type TeamSettings struct {
 	UpdatedAt     time.Time
 }
 
+// EnrichmentPrefs holds a user's per-user enrichment tuning. Scalars are
+// "resolved" values together with a *Set flag indicating whether the user has
+// an explicit override (true) or the value should fall back to the deployment
+// default (false). Rule lists are bucketed by kind.
+type EnrichmentPrefs struct {
+	MinRelevance float64
+	MaxMemories  int
+	LLMRewrite   bool
+	// Source flags: true when the scalar is a per-user override (not the default).
+	MinRelevanceSet bool
+	MaxMemoriesSet  bool
+	LLMRewriteSet   bool
+
+	AllowDomains  []string
+	DenyDomains   []string
+	AllowTags     []string
+	DenyTags      []string
+	PinnedEntries []string
+}
+
 type AuthConfig struct {
 	Provider        string // "local" | "oidc"
 	OIDCIssuer      string
 	OIDCClientID    string
 	OIDCRedirectURL string
 	UpdatedAt       time.Time
+}
+
+// EmbeddingConfig is the deployment-wide (singleton) embedding provider
+// configuration. There is exactly one row (id=1) in the embedding_config table.
+type EmbeddingConfig struct {
+	Provider      string // "openai" | "ollama"
+	Model         string
+	OpenAIAPIKey  string
+	OpenAIBaseURL string
+	OllamaURL     string
+	Dimension     int
+	UpdatedAt     time.Time
 }
 
 type ActivityEntry struct {
@@ -191,6 +223,18 @@ type TeamStore interface {
 	// Auth config (singleton row)
 	GetAuthConfig(ctx context.Context) (*AuthConfig, error)
 	PutAuthConfig(ctx context.Context, c AuthConfig) error
+
+	// Embedding config (singleton row, deployment-wide)
+	GetEmbeddingConfig(ctx context.Context) (*EmbeddingConfig, error)
+	PutEmbeddingConfig(ctx context.Context, cfg EmbeddingConfig) error
+
+	// Enrichment preferences (per-user, keyed by EffectiveActorID). Scalars unset by
+	// the user are returned NOT-set so callers can apply deployment defaults.
+	GetEnrichmentPrefs(ctx context.Context, userID string) (*EnrichmentPrefs, error)
+	PutEnrichmentPrefs(ctx context.Context, userID string, minRel *float64, maxMem *int, llmRewrite *bool) error
+	ReplaceEnrichmentRules(ctx context.Context, userID, kind string, values []string) error
+	AddEnrichmentRule(ctx context.Context, userID, kind, value string) error
+	RemoveEnrichmentRule(ctx context.Context, userID, kind, value string) error
 
 	// Activity log
 	LogActivity(ctx context.Context, e ActivityEntry) error

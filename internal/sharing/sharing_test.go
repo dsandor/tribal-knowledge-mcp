@@ -24,7 +24,16 @@ func (stubEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 
 type fakeEmbedProvider struct{ e embedding.Embedder }
 
-func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder { return f.e }
+func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder          { return f.e }
+func (f *fakeEmbedProvider) OpenAIEmbedder(_, _, _ string) embedding.Embedder { return f.e }
+
+// fakeEmbedConfigStore returns a deployment embedding config so Sources.Embedder
+// resolves through the (fake) EmbedProvider. provider="ollama" routes to Embedder.
+type fakeEmbedConfigStore struct{}
+
+func (fakeEmbedConfigStore) GetEmbeddingConfig(_ context.Context) (*storage.EmbeddingConfig, error) {
+	return &storage.EmbeddingConfig{Provider: "ollama", Model: "test-model", OllamaURL: "http://test-ollama"}, nil
+}
 
 type fakeLLMProvider struct{}
 
@@ -49,6 +58,7 @@ func newTestSources(e embedding.Embedder) *aiconfig.Sources {
 		Resolver:    resolver,
 		LLM:         fakeLLMProvider{},
 		Embed:       &fakeEmbedProvider{e: e},
+		EmbedConfig: fakeEmbedConfigStore{},
 		DefaultTeam: "default",
 	}
 }
@@ -65,6 +75,7 @@ func newNilEmbedSources() *aiconfig.Sources {
 		Resolver:    resolver,
 		LLM:         fakeLLMProvider{},
 		Embed:       &fakeEmbedProvider{e: nil},
+		EmbedConfig: fakeEmbedConfigStore{},
 		DefaultTeam: "default",
 	}
 }

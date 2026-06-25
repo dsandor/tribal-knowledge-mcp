@@ -22,7 +22,8 @@ func (filterFakeSettingsStore) GetTeamSettings(_ context.Context, _ string) (*st
 
 type filterFakeEmbedProvider struct{}
 
-func (filterFakeEmbedProvider) Embedder(_, _ string) embedding.Embedder { return nil }
+func (filterFakeEmbedProvider) Embedder(_, _ string) embedding.Embedder          { return nil }
+func (filterFakeEmbedProvider) OpenAIEmbedder(_, _, _ string) embedding.Embedder { return nil }
 
 type filterFakeLLMProvider struct{}
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  api, fetchTrending, fetchUsage, fetchContributions,
-  type Stats, type KnowledgeEntry, type TrendingEntry,
+  api, fetchTrending, fetchUsage, fetchContributions, getOnboardingStatus,
+  type Stats, type TrendingEntry,
 } from '@/lib/api'
 import {
   BookOpen, Network, Bot, Zap, Users, TrendingUp,
@@ -351,14 +351,10 @@ export default function Dashboard() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const [s, entries] = await Promise.all([api.stats(), api.knowledge.list({ limit: 5 })])
-      if (!loaded && Array.isArray(entries) && entries.length === 0 && !localStorage.getItem('tkm_onboarding_done')) {
-        navigate('/onboarding', { replace: true })
-        return
-      }
+      const s = await api.stats()
       setStats(s)
     } catch { /* keep previous value */ }
-  }, [loaded, navigate])
+  }, [])
 
   const fetchTrendingData = useCallback(async () => {
     try {
@@ -381,6 +377,13 @@ export default function Dashboard() {
   useEffect(() => {
     if (initialLoadDoneRef.current) return
     initialLoadDoneRef.current = true
+    // Authoritative onboarding check: only a superadmin on a deployment with no
+    // real team yet should be routed to onboarding. Swallow errors.
+    getOnboardingStatus()
+      .then(({ needs_onboarding }) => {
+        if (needs_onboarding) navigate('/onboarding', { replace: true })
+      })
+      .catch(() => { /* never trap the user on failure */ })
     Promise.all([
       fetchStats(),
       fetchTrendingData(),

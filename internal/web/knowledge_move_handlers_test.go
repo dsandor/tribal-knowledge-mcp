@@ -81,7 +81,7 @@ func newCopyServer(t *testing.T, store *mockStore) *web.Server {
 	staticFS := fstest.MapFS{
 		"index.html": {Data: []byte("<html><body>app</body></html>"), Mode: 0444, ModTime: time.Now()},
 	}
-	return web.NewServer(staticFS, store).WithAISources(newReembedSources())
+	return web.NewServer(staticFS, store).WithAISources(newReembedSources(store))
 }
 
 func TestCopyKnowledge(t *testing.T) {

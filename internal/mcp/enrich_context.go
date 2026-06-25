@@ -10,6 +10,7 @@ import (
 
 	"github.com/dsandor/memory/internal/aiconfig"
 	"github.com/dsandor/memory/internal/auth"
+	"github.com/dsandor/memory/internal/enrich"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/storage"
 	"github.com/dsandor/memory/internal/visibility"
@@ -21,7 +22,9 @@ import (
 // src provides per-call resolved LLM and embedder; when both resolve to nil the
 // improved_prompt is the rule-enhanced version only.
 // bus may be nil; in that case no live events are published.
-func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconfig.Sources, bus live.EventBus) {
+// defaults supplies the deployment-wide fallbacks applied to per-user enrichment
+// prefs the caller has not explicitly overridden.
+func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconfig.Sources, bus live.EventBus, defaults enrich.EnrichDefaults) {
 	s.AddTool(
 		mcplib.NewTool("enrich_context",
 			mcplib.WithDescription("ALWAYS call this FIRST, at the start of every user turn, before planning or drafting a response. Pass the raw user message plus optional team/category/user context. Returns improved_prompt (enhanced with applicable rules), applicable_rules (rule titles and content), relevant_knowledge (top matching entries with IDs), and missing_inputs (checklist of any context that would help). Idempotent and cheap — when in doubt, call it."),
@@ -30,8 +33,15 @@ func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconf
 			mcplib.WithString("category", mcplib.Description("Domain/category for scoping rules and knowledge search")),
 			mcplib.WithString("user", mcplib.Description("User identifier for user-scoped rules")),
 		),
-		logTool("enrich_context", HandleEnrichContext(store, src, bus)),
+		logTool("enrich_context", HandleEnrichContext(store, src, bus, defaults)),
 	)
+}
+
+// enrichmentPrefsReader is the minimal slice of storage.TeamStore the handler
+// needs to load a caller's per-user enrichment preferences. Stores that do not
+// implement it cause enrichment to fall back to deployment defaults.
+type enrichmentPrefsReader interface {
+	GetEnrichmentPrefs(ctx context.Context, userID string) (*storage.EnrichmentPrefs, error)
 }
 
 // enrichContextRule is the JSON-serializable form of a matched rule.
@@ -63,7 +73,7 @@ type enrichContextResponse struct {
 // relevant knowledge entries, and optionally an LLM-improved version of the prompt.
 // bus may be nil; when non-nil one TypeEnrichContext live event is published per call
 // and one ActivityEvent is persisted to the store (best-effort, never fails the tool call).
-func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.EventBus) server.ToolHandlerFunc {
+func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.EventBus, defaults enrich.EnrichDefaults) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		prompt := req.GetString("prompt", "")
 		if prompt == "" {
@@ -119,16 +129,41 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 			}
 		}
 
-		// --- Step 2: Semantic knowledge search ---
+		// --- Step 2: Semantic knowledge search + preference-driven selection ---
 		relevantKnowledge := []enrichContextKnowledge{}
+
+		// Resolve the caller's per-user enrichment prefs, then fill any unset
+		// scalar with the deployment default. A nil prefs (store error, missing
+		// row, or store without enrichment support) is treated as fully-default.
+		actorID := auth.GetTeamContext(ctx).EffectiveActorID()
+		var prefs *storage.EnrichmentPrefs
+		if pr, ok := store.(enrichmentPrefsReader); ok {
+			prefs, _ = pr.GetEnrichmentPrefs(ctx, actorID) // degrade gracefully
+		}
+		if prefs == nil {
+			prefs = &storage.EnrichmentPrefs{}
+		}
+		if !prefs.MinRelevanceSet {
+			prefs.MinRelevance = defaults.MinRelevance
+		}
+		if !prefs.MaxMemoriesSet {
+			prefs.MaxMemories = defaults.MaxMemories
+		}
+		if !prefs.LLMRewriteSet {
+			prefs.LLMRewrite = true
+		}
 
 		if embedder != nil {
 			vec, err := embedder.Embed(ctx, prompt)
 			if err == nil { // degrade gracefully — return partial result on store/embed errors
-				const wantK = 5
-				fetchK := wantK * 2
-				if fetchK > 40 {
-					fetchK = 40
+				// Over-fetch so Select has headroom to apply deny/allow/threshold
+				// filters before capping to MaxMemories.
+				fetchK := prefs.MaxMemories * 3
+				if fetchK < 30 {
+					fetchK = 30
+				}
+				if fetchK > 100 {
+					fetchK = 100
 				}
 				results, err := store.SearchSimilar(ctx, vec, fetchK)
 				if err == nil { // degrade gracefully — return partial result on store/embed errors
@@ -143,16 +178,20 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 					results = filtered
 					// Per-user suppression (no-op for team tokens / stdio).
 					results = visibility.FilterResults(callerVisibility(ctx, store), results)
-					if len(results) > wantK {
-						results = results[:wantK]
-					}
+
+					// Build scored candidates (Score is the raw vector distance).
+					scored := make([]enrich.ScoredEntry, 0, len(results))
 					for _, r := range results {
+						scored = append(scored, enrich.ScoredEntry{Entry: r.Entry, Distance: r.Score})
+					}
+					included, _ := enrich.Select(scored, *prefs)
+					for _, c := range included {
 						relevantKnowledge = append(relevantKnowledge, enrichContextKnowledge{
-							ID:      r.Entry.ID,
-							Title:   r.Entry.Title,
-							Score:   r.Score,
-							Domain:  r.Entry.Domain,
-							Content: r.Entry.Content,
+							ID:      c.Entry.ID,
+							Title:   c.Entry.Title,
+							Score:   c.Relevance,
+							Domain:  c.Entry.Domain,
+							Content: c.Entry.Content,
 						})
 					}
 				}
@@ -167,8 +206,9 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 			improvedPrompt = buildEnhancedPrompt(prompt, rawRules)
 		}
 
-		// If an LLM client is available and there is relevant knowledge, use it to further improve.
-		if llmClient != nil && len(relevantKnowledge) > 0 {
+		// If the caller has not disabled LLM rewrite, an LLM client is available,
+		// and there is relevant knowledge, use it to further improve the prompt.
+		if prefs.LLMRewrite && llmClient != nil && len(relevantKnowledge) > 0 {
 			knowledgeBlock := ""
 			for i, k := range relevantKnowledge {
 				knowledgeBlock += fmt.Sprintf("Knowledge %d (score=%.3f, domain=%s):\nTitle: %s\n%s\n\n",

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { api, searchSimilar, addVisibilityRule, getMyTeams, setEntryAuthor, type KnowledgeEntry } from '@/lib/api'
-import { ArrowLeft, Star, Pencil, Trash2, EyeOff, UserX, Share2, Copy, Check, X } from 'lucide-react'
+import { api, searchSimilar, addVisibilityRule, getMyTeams, setEntryAuthor, pinEntry, type KnowledgeEntry } from '@/lib/api'
+import { ArrowLeft, Star, Pencil, Pin, Trash2, EyeOff, UserX, Share2, Copy, Check, X } from 'lucide-react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -153,6 +153,16 @@ export default function KnowledgeDetail() {
     try {
       await addVisibilityRule('item', entry.ID)
       setVisMsg('Item hidden from your results')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const handlePin = async () => {
+    if (!entry) return
+    try {
+      await pinEntry(entry.ID)
+      setVisMsg('Pinned to enrichment')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -378,6 +388,9 @@ export default function KnowledgeDetail() {
         <Chip label={entry.Type} size="small" />
         <IconButton size="small" onClick={handleShare} disabled={sharing} title="Share with another team">
           <Share2 style={{ width: 16, height: 16 }} />
+        </IconButton>
+        <IconButton size="small" onClick={handlePin} title="Pin to enrichment">
+          <Pin style={{ width: 16, height: 16 }} />
         </IconButton>
         <IconButton size="small" onClick={handleHide} title="Hide this item from my results">
           <EyeOff style={{ width: 16, height: 16 }} />

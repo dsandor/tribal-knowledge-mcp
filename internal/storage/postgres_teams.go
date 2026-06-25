@@ -110,6 +110,22 @@ func (s *PostgresStore) migrateTeams(ctx context.Context) error {
 				updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 			)`},
 		{"auth_config_seed", `INSERT INTO auth_config DEFAULT VALUES ON CONFLICT DO NOTHING`},
+		{"embedding_config", `
+			CREATE TABLE IF NOT EXISTS embedding_config (
+				id              INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+				provider        TEXT NOT NULL DEFAULT 'openai',
+				model           TEXT NOT NULL DEFAULT '',
+				openai_api_key  TEXT NOT NULL DEFAULT '',
+				openai_base_url TEXT NOT NULL DEFAULT '',
+				ollama_url      TEXT NOT NULL DEFAULT '',
+				dimension       INT NOT NULL DEFAULT 0,
+				updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`},
+		{"embedding_config_seed", fmt.Sprintf(`
+			INSERT INTO embedding_config
+				(id, provider, model, openai_api_key, openai_base_url, ollama_url, dimension)
+			VALUES (1, 'openai', 'text-embedding-3-small', '', 'https://api.openai.com', '', %d)
+			ON CONFLICT DO NOTHING`, s.embeddingDim)},
 		{"activity_log", `
 			CREATE TABLE IF NOT EXISTS activity_log (
 				id          TEXT PRIMARY KEY,
@@ -886,6 +902,51 @@ func (s *PostgresStore) PutAuthConfig(ctx context.Context, c AuthConfig) error {
 	`, c.Provider, c.OIDCIssuer, c.OIDCClientID, c.OIDCRedirectURL)
 	if err != nil {
 		return fmt.Errorf("put auth config: %w", err)
+	}
+	return nil
+}
+
+// ── Embedding Config ──────────────────────────────────────────────────────────
+
+func (s *PostgresStore) GetEmbeddingConfig(ctx context.Context) (*EmbeddingConfig, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT provider, model, openai_api_key, openai_base_url, ollama_url, dimension, updated_at
+		FROM embedding_config WHERE id = 1
+	`)
+	var cfg EmbeddingConfig
+	var updatedAt time.Time
+	err := row.Scan(&cfg.Provider, &cfg.Model, &cfg.OpenAIAPIKey, &cfg.OpenAIBaseURL, &cfg.OllamaURL, &cfg.Dimension, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &EmbeddingConfig{
+				Provider:      "openai",
+				Model:         "text-embedding-3-small",
+				OpenAIBaseURL: "https://api.openai.com",
+				Dimension:     s.embeddingDim,
+			}, nil
+		}
+		return nil, fmt.Errorf("get embedding config: %w", err)
+	}
+	cfg.UpdatedAt = updatedAt
+	return &cfg, nil
+}
+
+func (s *PostgresStore) PutEmbeddingConfig(ctx context.Context, c EmbeddingConfig) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO embedding_config
+			(id, provider, model, openai_api_key, openai_base_url, ollama_url, dimension, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, $6, NOW())
+		ON CONFLICT (id) DO UPDATE SET
+			provider        = EXCLUDED.provider,
+			model           = EXCLUDED.model,
+			openai_api_key  = EXCLUDED.openai_api_key,
+			openai_base_url = EXCLUDED.openai_base_url,
+			ollama_url      = EXCLUDED.ollama_url,
+			dimension       = EXCLUDED.dimension,
+			updated_at      = NOW()
+	`, c.Provider, c.Model, c.OpenAIAPIKey, c.OpenAIBaseURL, c.OllamaURL, c.Dimension)
+	if err != nil {
+		return fmt.Errorf("put embedding config: %w", err)
 	}
 	return nil
 }

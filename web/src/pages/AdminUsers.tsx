@@ -13,9 +13,11 @@ import Paper from '@mui/material/Paper';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 import Chip from '@mui/material/Chip';
-import { listAllUsers, fetchTeams, assignUserTeam, type AdminUser } from '../lib/api';
+import { listAllUsers, fetchTeams, assignUserTeam, setUserRole, getMe, type AdminUser } from '../lib/api';
 
 interface Team { id: string; name: string; }
+
+const ROLE_OPTIONS = ['member', 'curator', 'admin', 'superadmin'];
 
 export default function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -24,6 +26,9 @@ export default function AdminUsers() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const [roleSaving, setRoleSaving] = useState<Record<string, boolean>>({});
+  const [roleSaveErrors, setRoleSaveErrors] = useState<Record<string, string>>({});
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
 
   useEffect(() => {
     Promise.all([listAllUsers(), fetchTeams()])
@@ -33,7 +38,26 @@ export default function AdminUsers() {
       })
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load'))
       .finally(() => setLoading(false));
+    // Gate the editable role control on the current viewer's role.
+    getMe()
+      .then(me => setIsSuperadmin(me.role === 'superadmin'))
+      .catch(() => setIsSuperadmin(false));
   }, []);
+
+  const handleRoleChange = async (user: AdminUser, newRole: string) => {
+    setRoleSaving(s => ({ ...s, [user.id]: true }));
+    setRoleSaveErrors(e => ({ ...e, [user.id]: '' }));
+    try {
+      await setUserRole(user.id, newRole);
+      setUsers(us => us.map(u =>
+        u.id === user.id ? { ...u, role: newRole } : u
+      ));
+    } catch (e) {
+      setRoleSaveErrors(errs => ({ ...errs, [user.id]: e instanceof Error ? e.message : 'Failed' }));
+    } finally {
+      setRoleSaving(s => ({ ...s, [user.id]: false }));
+    }
+  };
 
   const handleTeamChange = async (user: AdminUser, newTeamId: string) => {
     setSaving(s => ({ ...s, [user.id]: true }));
@@ -90,8 +114,29 @@ export default function AdminUsers() {
               <TableRow key={u.id} hover>
                 <TableCell sx={{ fontWeight: 500 }}>{u.email || '—'}</TableCell>
                 <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>{u.name || '—'}</TableCell>
-                <TableCell>
-                  <Chip label={u.role} size="small" sx={{ fontSize: 11 }} />
+                <TableCell sx={{ minWidth: isSuperadmin ? 150 : undefined }}>
+                  {isSuperadmin ? (
+                    <>
+                      <Select
+                        size="small"
+                        value={u.role}
+                        onChange={e => handleRoleChange(u, e.target.value)}
+                        disabled={roleSaving[u.id]}
+                        sx={{ fontSize: 13, minWidth: 130 }}
+                      >
+                        {ROLE_OPTIONS.map(r => (
+                          <MenuItem key={r} value={r}>{r}</MenuItem>
+                        ))}
+                      </Select>
+                      {roleSaveErrors[u.id] && (
+                        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                          {roleSaveErrors[u.id]}
+                        </Typography>
+                      )}
+                    </>
+                  ) : (
+                    <Chip label={u.role} size="small" sx={{ fontSize: 11 }} />
+                  )}
                 </TableCell>
                 <TableCell sx={{ minWidth: 180 }}>
                   <Select

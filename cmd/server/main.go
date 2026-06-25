@@ -15,6 +15,7 @@ import (
 	"github.com/dsandor/memory/internal/auth"
 	"github.com/dsandor/memory/internal/config"
 	"github.com/dsandor/memory/internal/embedding"
+	"github.com/dsandor/memory/internal/enrich"
 	"github.com/dsandor/memory/internal/live"
 	"github.com/dsandor/memory/internal/llm"
 	internalmcp "github.com/dsandor/memory/internal/mcp"
@@ -173,6 +174,7 @@ func main() {
 		Resolver:    resolver,
 		LLM:         llm.NewProvider(),
 		Embed:       embedding.NewProvider(),
+		EmbedConfig: store,
 		DefaultTeam: cfg.TeamID,
 	}
 
@@ -197,6 +199,7 @@ func main() {
 		WithTrustXFF(cfg.TrustXFF).
 		WithLive(liveHub, presence).
 		WithAISources(src).
+		WithEnrichDefaults(cfg.EnrichMinRelevance, cfg.EnrichMaxMemories).
 		WithBackupConfig(cfg.EmbeddingDim, version())
 
 	httpServer := &http.Server{
@@ -255,7 +258,10 @@ func main() {
 	internalmcp.RegisterUsageTools(mcpServer, store, liveHub)
 	internalmcp.RegisterResources(mcpServer, store)
 	internalmcp.RegisterPromptSuggest(mcpServer, store, src)
-	internalmcp.RegisterEnrichContext(mcpServer, store, src, liveHub)
+	internalmcp.RegisterEnrichContext(mcpServer, store, src, liveHub, enrich.EnrichDefaults{
+		MinRelevance: cfg.EnrichMinRelevance,
+		MaxMemories:  cfg.EnrichMaxMemories,
+	})
 
 	// Pipeline always starts; it skips gracefully (logs) when no effective API key.
 	p := pipeline.New(store, src, pipeline.Config{

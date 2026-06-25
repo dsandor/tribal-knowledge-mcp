@@ -29,6 +29,19 @@ type mockStore struct {
 	visRules map[string][]storage.VisibilityRule
 	// users maps a user id to a stored User (for owner-identity resolution).
 	users map[string]storage.User
+	// searchScores optionally maps an entry ID to the raw distance returned by
+	// SearchSimilar. Entries without an entry are scored 0.9 (the legacy default).
+	searchScores map[string]float64
+	// enrichPrefs is the per-user enrichment prefs returned by GetEnrichmentPrefs,
+	// keyed by user id. nil for all other users (handler treats as full defaults).
+	enrichPrefs map[string]*storage.EnrichmentPrefs
+}
+
+func (m *mockStore) GetEnrichmentPrefs(_ context.Context, userID string) (*storage.EnrichmentPrefs, error) {
+	if m.enrichPrefs == nil {
+		return nil, nil
+	}
+	return m.enrichPrefs[userID], nil
 }
 
 func (m *mockStore) StoreEntry(_ context.Context, e storage.KnowledgeEntry, _ []float32) (string, error) {
@@ -88,7 +101,13 @@ func (m *mockStore) DeleteEntry(_ context.Context, id string) error {
 func (m *mockStore) SearchSimilar(_ context.Context, _ []float32, topK int) ([]storage.SearchResult, error) {
 	results := make([]storage.SearchResult, 0, len(m.entries))
 	for _, e := range m.entries {
-		results = append(results, storage.SearchResult{Entry: e, Score: 0.9})
+		score := 0.9
+		if m.searchScores != nil {
+			if s, ok := m.searchScores[e.ID]; ok {
+				score = s
+			}
+		}
+		results = append(results, storage.SearchResult{Entry: e, Score: score})
 	}
 	if len(results) > topK {
 		results = results[:topK]
@@ -126,6 +145,9 @@ func (m *mockStore) GetEntryByContentHash(_ context.Context, _ string) (*storage
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
 func (m *mockStore) ReassignEntriesTeam(_ context.Context, _ []string, _ string) error {
+	return nil
+}
+func (m *mockStore) RebuildEmbeddingColumns(_ context.Context, _ int) error {
 	return nil
 }
 func (m *mockStore) AddVisibilityRule(_ context.Context, userID, ruleType, value string) (storage.VisibilityRule, error) {
@@ -194,7 +216,16 @@ func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 // fakeEmbedProvider always returns the same Embedder regardless of url/model.
 type fakeEmbedProvider struct{ e embedding.Embedder }
 
-func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder { return f.e }
+func (f *fakeEmbedProvider) Embedder(_, _ string) embedding.Embedder          { return f.e }
+func (f *fakeEmbedProvider) OpenAIEmbedder(_, _, _ string) embedding.Embedder { return f.e }
+
+// fakeEmbedConfigStore returns a deployment embedding config so Sources.Embedder
+// resolves through the (fake) EmbedProvider. provider="ollama" routes to Embedder.
+type fakeEmbedConfigStore struct{}
+
+func (fakeEmbedConfigStore) GetEmbeddingConfig(_ context.Context) (*storage.EmbeddingConfig, error) {
+	return &storage.EmbeddingConfig{Provider: "ollama", Model: "test-model", OllamaURL: "http://test-ollama"}, nil
+}
 
 // fakeLLMProvider always returns the same Client regardless of apiKey/model.
 type fakeLLMProvider struct{ c llm.Client }
@@ -224,6 +255,7 @@ func newTestSources(e embedding.Embedder, c llm.Client) *aiconfig.Sources {
 		Resolver:    resolver,
 		LLM:         &fakeLLMProvider{c: c},
 		Embed:       &fakeEmbedProvider{e: e},
+		EmbedConfig: fakeEmbedConfigStore{},
 		DefaultTeam: "test",
 	}
 }
@@ -243,6 +275,7 @@ func newChunkedTestSources(e embedding.Embedder, maxTokens int) *aiconfig.Source
 		Resolver:    resolver,
 		LLM:         &fakeLLMProvider{c: nil},
 		Embed:       &fakeEmbedProvider{e: e},
+		EmbedConfig: fakeEmbedConfigStore{},
 		DefaultTeam: "test",
 	}
 }
@@ -413,7 +446,10 @@ func TestHandleKnowledgeStore_TinyContentSingleChunk(t *testing.T) {
 	}
 }
 
-func TestHandleKnowledgeStore_NilEmbedder_ReturnsToolError(t *testing.T) {
+// TestHandleKnowledgeStore_NilEmbedder_FailSoft verifies that a nil embedder is
+// non-fatal: the entry text still persists (with nil chunk embeddings) and the
+// tool returns success with embedding_skipped=true rather than an error.
+func TestHandleKnowledgeStore_NilEmbedder_FailSoft(t *testing.T) {
 	store := &mockStore{}
 
 	// newNilEmbedSources yields a Sources whose Embedder always returns nil.
@@ -428,11 +464,38 @@ func TestHandleKnowledgeStore_NilEmbedder_ReturnsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil Go error, got: %v", err)
 	}
-	if !result.IsError {
-		t.Fatal("expected IsError=true when embedder is nil")
+	if result.IsError {
+		t.Fatalf("expected fail-soft success when embedder is nil, got tool error: %v", result.Content)
 	}
-	if len(store.entries) != 0 {
-		t.Errorf("expected 0 stored entries when embedding is unconfigured, got %d", len(store.entries))
+	if len(store.entries) != 1 {
+		t.Fatalf("expected 1 stored entry despite missing embedder, got %d", len(store.entries))
+	}
+	for i, c := range store.lastChunks {
+		if c.Embedding != nil {
+			t.Errorf("chunk %d: expected nil embedding when embedder is unconfigured", i)
+		}
+	}
+	// The text response should mark embedding as skipped.
+	if len(result.Content) == 0 {
+		t.Fatal("expected a text result")
+	}
+	tc, ok := result.Content[0].(mcplib.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", result.Content[0])
+	}
+	var sr struct {
+		ID               string `json:"id"`
+		Status           string `json:"status"`
+		EmbeddingSkipped bool   `json:"embedding_skipped"`
+	}
+	if err := json.Unmarshal([]byte(tc.Text), &sr); err != nil {
+		t.Fatalf("decode result json: %v (%s)", err, tc.Text)
+	}
+	if !sr.EmbeddingSkipped {
+		t.Errorf("expected embedding_skipped=true, got %s", tc.Text)
+	}
+	if sr.Status != "stored" || sr.ID == "" {
+		t.Errorf("expected stored result with id, got %s", tc.Text)
 	}
 }
 

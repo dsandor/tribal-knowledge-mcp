@@ -712,6 +712,51 @@ func (s *SQLiteStore) PutAuthConfig(ctx context.Context, c AuthConfig) error {
 	return nil
 }
 
+// ── Embedding Config ──────────────────────────────────────────────────────────
+
+func (s *SQLiteStore) GetEmbeddingConfig(ctx context.Context) (*EmbeddingConfig, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT provider, model, openai_api_key, openai_base_url, ollama_url, dimension, updated_at
+		FROM embedding_config WHERE id = 1
+	`)
+	var cfg EmbeddingConfig
+	var updatedAt string
+	err := row.Scan(&cfg.Provider, &cfg.Model, &cfg.OpenAIAPIKey, &cfg.OpenAIBaseURL, &cfg.OllamaURL, &cfg.Dimension, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &EmbeddingConfig{
+				Provider:      "openai",
+				Model:         "text-embedding-3-small",
+				OpenAIBaseURL: "https://api.openai.com",
+				Dimension:     s.embeddingDim,
+			}, nil
+		}
+		return nil, fmt.Errorf("get embedding config: %w", err)
+	}
+	cfg.UpdatedAt = parseTimestamp(updatedAt)
+	return &cfg, nil
+}
+
+func (s *SQLiteStore) PutEmbeddingConfig(ctx context.Context, c EmbeddingConfig) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO embedding_config
+			(id, provider, model, openai_api_key, openai_base_url, ollama_url, dimension, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			provider        = excluded.provider,
+			model           = excluded.model,
+			openai_api_key  = excluded.openai_api_key,
+			openai_base_url = excluded.openai_base_url,
+			ollama_url      = excluded.ollama_url,
+			dimension       = excluded.dimension,
+			updated_at      = CURRENT_TIMESTAMP
+	`, c.Provider, c.Model, c.OpenAIAPIKey, c.OpenAIBaseURL, c.OllamaURL, c.Dimension)
+	if err != nil {
+		return fmt.Errorf("put embedding config: %w", err)
+	}
+	return nil
+}
+
 // ── Activity Log ──────────────────────────────────────────────────────────────
 
 func (s *SQLiteStore) LogActivity(ctx context.Context, e ActivityEntry) error {

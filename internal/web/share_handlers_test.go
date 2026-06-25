@@ -81,7 +81,7 @@ func newShareServer(t *testing.T, store web.AllStore) *web.Server {
 	}
 	// newReembedSources supplies a non-nil stub embedder for any team so import
 	// can chunk + embed without real AI configuration.
-	return web.NewServer(staticFS, store).WithAISources(newReembedSources())
+	return web.NewServer(staticFS, store).WithAISources(newReembedSources(store))
 }
 
 // sourceEntry is a fixture entry owned by the caller's team ("test-team").

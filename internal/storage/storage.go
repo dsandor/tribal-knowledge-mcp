@@ -243,6 +243,11 @@ type Store interface {
 	// updating entries.team_id for each id. Returns an error if any update fails
 	// (the whole batch is rolled back).
 	ReassignEntriesTeam(ctx context.Context, entryIDs []string, teamID string) error
+	// RebuildEmbeddingColumns drops and recreates the vector storage at newDim,
+	// discarding all existing vectors (the re-embed job repopulates them). The
+	// text chunk tables (entry_chunks) are preserved. After a successful rebuild
+	// the store's effective embedding dimension becomes newDim.
+	RebuildEmbeddingColumns(ctx context.Context, newDim int) error
 	// Ping verifies the storage connection is alive. Returns nil on success.
 	Ping(ctx context.Context) error
 	Close() error

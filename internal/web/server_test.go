@@ -43,6 +43,130 @@ type mockStore struct {
 	// teams maps a team id to a stored Team; when present, GetTeam returns it
 	// (exercises target-team validation). Empty map preserves the nil default.
 	teams map[string]storage.Team
+	// teamsList is returned by ListTeams (drives onboarding-status detection).
+	teamsList []storage.Team
+	// embeddingCfg is returned by GetEmbeddingConfig and updated by
+	// PutEmbeddingConfig; nil yields a safe default.
+	embeddingCfg *storage.EmbeddingConfig
+	// enrichPrefs maps a user id to that user's enrichment prefs (scalars +
+	// *Set flags). Mutated by Put/Add/Replace/Remove so web tests can drive it.
+	enrichPrefs map[string]*storage.EnrichmentPrefs
+}
+
+// ensureEnrichPrefs lazily initializes and returns the prefs entry for userID.
+func (m *mockStore) ensureEnrichPrefs(userID string) *storage.EnrichmentPrefs {
+	if m.enrichPrefs == nil {
+		m.enrichPrefs = map[string]*storage.EnrichmentPrefs{}
+	}
+	p := m.enrichPrefs[userID]
+	if p == nil {
+		p = &storage.EnrichmentPrefs{}
+		m.enrichPrefs[userID] = p
+	}
+	return p
+}
+
+// enrichBucket returns a pointer to the slice on p for the given kind.
+func enrichBucket(p *storage.EnrichmentPrefs, kind string) *[]string {
+	switch kind {
+	case "allow_domain":
+		return &p.AllowDomains
+	case "deny_domain":
+		return &p.DenyDomains
+	case "allow_tag":
+		return &p.AllowTags
+	case "deny_tag":
+		return &p.DenyTags
+	case "pin_entry":
+		return &p.PinnedEntries
+	}
+	return nil
+}
+
+func enrichNormalize(kind, value string) string {
+	switch kind {
+	case "pin_entry":
+		return value
+	default:
+		return strings.ToLower(value)
+	}
+}
+
+func (m *mockStore) GetEnrichmentPrefs(_ context.Context, userID string) (*storage.EnrichmentPrefs, error) {
+	if m.enrichPrefs != nil {
+		if p, ok := m.enrichPrefs[userID]; ok {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return &storage.EnrichmentPrefs{}, nil
+}
+
+func (m *mockStore) PutEnrichmentPrefs(_ context.Context, userID string, minRel *float64, maxMem *int, llmRewrite *bool) error {
+	p := m.ensureEnrichPrefs(userID)
+	if minRel != nil {
+		p.MinRelevance, p.MinRelevanceSet = *minRel, true
+	} else {
+		p.MinRelevance, p.MinRelevanceSet = 0, false
+	}
+	if maxMem != nil {
+		p.MaxMemories, p.MaxMemoriesSet = *maxMem, true
+	} else {
+		p.MaxMemories, p.MaxMemoriesSet = 0, false
+	}
+	if llmRewrite != nil {
+		p.LLMRewrite, p.LLMRewriteSet = *llmRewrite, true
+	} else {
+		p.LLMRewrite, p.LLMRewriteSet = false, false
+	}
+	return nil
+}
+
+func (m *mockStore) ReplaceEnrichmentRules(_ context.Context, userID, kind string, values []string) error {
+	p := m.ensureEnrichPrefs(userID)
+	b := enrichBucket(p, kind)
+	if b == nil {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, enrichNormalize(kind, v))
+	}
+	*b = out
+	return nil
+}
+
+func (m *mockStore) AddEnrichmentRule(_ context.Context, userID, kind, value string) error {
+	p := m.ensureEnrichPrefs(userID)
+	b := enrichBucket(p, kind)
+	if b == nil {
+		return nil
+	}
+	nv := enrichNormalize(kind, value)
+	for _, existing := range *b {
+		if existing == nv {
+			return nil
+		}
+	}
+	*b = append(*b, nv)
+	return nil
+}
+
+func (m *mockStore) RemoveEnrichmentRule(_ context.Context, userID, kind, value string) error {
+	p := m.ensureEnrichPrefs(userID)
+	b := enrichBucket(p, kind)
+	if b == nil {
+		return nil
+	}
+	nv := enrichNormalize(kind, value)
+	out := (*b)[:0]
+	for _, existing := range *b {
+		if existing != nv {
+			out = append(out, existing)
+		}
+	}
+	*b = out
+	return nil
 }
 
 // --- AgentStore / AnalysisStore / Store methods ---
@@ -217,7 +341,7 @@ func (m *mockStore) GetTeam(_ context.Context, id string) (*storage.Team, error)
 	}
 	return nil, nil
 }
-func (m *mockStore) ListTeams(_ context.Context) ([]storage.Team, error) { return nil, nil }
+func (m *mockStore) ListTeams(_ context.Context) ([]storage.Team, error) { return m.teamsList, nil }
 func (m *mockStore) SetTeamEnabled(_ context.Context, id string, enabled bool) error {
 	return nil
 }
@@ -289,7 +413,22 @@ func (m *mockStore) PutTeamSettings(_ context.Context, s storage.TeamSettings) e
 func (m *mockStore) GetAuthConfig(_ context.Context) (*storage.AuthConfig, error) {
 	return &storage.AuthConfig{Provider: "local"}, nil
 }
-func (m *mockStore) PutAuthConfig(_ context.Context, c storage.AuthConfig) error  { return nil }
+func (m *mockStore) PutAuthConfig(_ context.Context, c storage.AuthConfig) error { return nil }
+func (m *mockStore) GetEmbeddingConfig(_ context.Context) (*storage.EmbeddingConfig, error) {
+	if m.embeddingCfg != nil {
+		return m.embeddingCfg, nil
+	}
+	return &storage.EmbeddingConfig{
+		Provider:      "openai",
+		Model:         "text-embedding-3-small",
+		OpenAIBaseURL: "https://api.openai.com",
+	}, nil
+}
+func (m *mockStore) PutEmbeddingConfig(_ context.Context, c storage.EmbeddingConfig) error {
+	cp := c
+	m.embeddingCfg = &cp
+	return nil
+}
 func (m *mockStore) LogActivity(_ context.Context, e storage.ActivityEntry) error { return nil }
 func (m *mockStore) QueryActivity(_ context.Context, teamID string, limit int) ([]storage.ActivityEntry, error) {
 	return nil, nil
@@ -320,6 +459,9 @@ func (m *mockStore) ListPipelineRuns(_ context.Context, _ string, _ int) ([]stor
 }
 func (m *mockStore) BackfillTeamID(_ context.Context, _ string) error { return nil }
 func (m *mockStore) ReassignEntriesTeam(_ context.Context, _ []string, _ string) error {
+	return nil
+}
+func (m *mockStore) RebuildEmbeddingColumns(_ context.Context, _ int) error {
 	return nil
 }
 func (m *mockStore) AddVisibilityRule(_ context.Context, _, _, _ string) (storage.VisibilityRule, error) {

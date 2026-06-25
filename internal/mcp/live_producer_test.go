@@ -5,8 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	internalmcp "github.com/dsandor/memory/internal/mcp"
+	"github.com/dsandor/memory/internal/enrich"
 	"github.com/dsandor/memory/internal/live"
+	internalmcp "github.com/dsandor/memory/internal/mcp"
 	"github.com/dsandor/memory/internal/storage"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -58,7 +59,7 @@ func TestHandleEnrichContext_PublishesLiveEvent_StdioFallback(t *testing.T) {
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 	bus := &fakeBus{}
 
-	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus)
+	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus, enrich.EnrichDefaults{})
 	req := callReq("prompt", "Analyse Q3 earnings for ACME Corp", "user", "alice", "team", "finance")
 
 	result, err := handler(context.Background(), req)
@@ -111,7 +112,7 @@ func TestHandleEnrichContext_PublishesLiveEvent_LongPromptCapped(t *testing.T) {
 		longPrompt += "x"
 	}
 
-	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus)
+	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus, enrich.EnrichDefaults{})
 	req := callReq("prompt", longPrompt)
 
 	_, err := handler(context.Background(), req)
@@ -133,7 +134,7 @@ func TestHandleEnrichContext_NilBus_NoPublish_NoChange(t *testing.T) {
 	store := &mockStoreWithActivity{}
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 
-	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), nil)
+	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), nil, enrich.EnrichDefaults{})
 	req := callReq("prompt", "test prompt with nil bus")
 
 	result, err := handler(context.Background(), req)
@@ -151,7 +152,7 @@ func TestHandleEnrichContext_RecordsActivity(t *testing.T) {
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 	bus := &fakeBus{}
 
-	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus)
+	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus, enrich.EnrichDefaults{})
 	req := callReq("prompt", "what is the DCF model?")
 
 	_, err := handler(context.Background(), req)
@@ -179,7 +180,7 @@ func TestHandleEnrichContext_StdioFallback_NoToolArgs(t *testing.T) {
 	embedder := &mockEmbedder{embedding: []float32{0.1}}
 	bus := &fakeBus{}
 
-	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus)
+	handler := internalmcp.HandleEnrichContext(store, newTestSources(embedder, nil), bus, enrich.EnrichDefaults{})
 	req := callReq("prompt", "plain prompt no user or team")
 
 	_, err := handler(context.Background(), req)
