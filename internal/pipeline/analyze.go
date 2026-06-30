@@ -4,21 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
 )
-
-var jsonFenceRe = regexp.MustCompile("(?s)```[^\n]*\n(.*?)```")
-
-func extractJSON(s string) string {
-	if m := jsonFenceRe.FindStringSubmatch(s); len(m) > 1 {
-		return strings.TrimSpace(m[1])
-	}
-	return strings.TrimSpace(s)
-}
 
 // SummarizeResult is the LLM-generated title and summary for a cluster.
 type SummarizeResult struct {
@@ -42,7 +32,7 @@ func SummarizeCluster(ctx context.Context, client llm.Client, entries []storage.
 		return SummarizeResult{}, fmt.Errorf("llm: %w", err)
 	}
 	var result SummarizeResult
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(resp)), &result); err != nil {
 		return SummarizeResult{}, fmt.Errorf("parse summarize response %q: %w", resp, err)
 	}
 	return result, nil
@@ -70,7 +60,7 @@ func ScoreEntry(ctx context.Context, client llm.Client, entry storage.KnowledgeE
 		return QualityScore{}, fmt.Errorf("llm: %w", err)
 	}
 	var score QualityScore
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &score); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(resp)), &score); err != nil {
 		return QualityScore{}, fmt.Errorf("parse score response %q: %w", resp, err)
 	}
 	score.Total = score.Coherence + score.Specificity
@@ -104,7 +94,7 @@ func DetectGaps(ctx context.Context, client llm.Client, domainCounts map[string]
 	var result struct {
 		Gaps []DomainGap `json:"gaps"`
 	}
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(resp)), &result); err != nil {
 		return nil, fmt.Errorf("parse gaps response %q: %w", resp, err)
 	}
 	return result.Gaps, nil

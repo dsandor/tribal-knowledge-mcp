@@ -570,7 +570,7 @@ Return JSON: {"title": "...", "content": "...", "tags": ["..."]}`,
 		Content string   `json:"content"`
 		Tags    []string `json:"tags"`
 	}
-	if err := json.Unmarshal([]byte(rawResponse), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(rawResponse)), &result); err != nil {
 		return fmt.Errorf("parse llm response: %w (raw: %.200s)", err, rawResponse)
 	}
 	if result.Title == "" || result.Content == "" {

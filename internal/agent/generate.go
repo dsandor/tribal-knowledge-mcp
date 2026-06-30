@@ -4,21 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/dsandor/memory/internal/llm"
 	"github.com/dsandor/memory/internal/storage"
 )
-
-var jsonFenceRe = regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)```")
-
-func extractJSON(s string) string {
-	if m := jsonFenceRe.FindStringSubmatch(s); len(m) > 1 {
-		return strings.TrimSpace(m[1])
-	}
-	return strings.TrimSpace(s)
-}
 
 type generateResponse struct {
 	SystemPrompt string `json:"system_prompt"`
@@ -52,7 +42,7 @@ func Generate(ctx context.Context, client llm.Client, cluster storage.Cluster, e
 	}
 
 	var result generateResponse
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(resp)), &result); err != nil {
 		return nil, fmt.Errorf("parse agent response: %w", err)
 	}
 
@@ -109,7 +99,7 @@ func Refactor(ctx context.Context, client llm.Client, current *storage.Agent, en
 	}
 
 	var result generateResponse
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(resp)), &result); err != nil {
 		return nil, fmt.Errorf("parse refactor response: %w", err)
 	}
 

@@ -94,19 +94,6 @@ func TestDetectGaps_Empty(t *testing.T) {
 	}
 }
 
-func TestExtractJSON_StripsFences(t *testing.T) {
-	cases := []struct{ input, want string }{
-		{`{"k":"v"}`, `{"k":"v"}`},
-		{"```json\n{\"k\":\"v\"}\n```", `{"k":"v"}`},
-		{"```\n{\"k\":\"v\"}\n```", `{"k":"v"}`},
-	}
-	for _, tc := range cases {
-		if got := extractJSON(tc.input); got != tc.want {
-			t.Errorf("extractJSON(%q) = %q, want %q", tc.input, got, tc.want)
-		}
-	}
-}
-
 func TestTruncate(t *testing.T) {
 	if got := truncate("hello", 10); got != "hello" {
 		t.Errorf("truncate short: got %q, want %q", got, "hello")

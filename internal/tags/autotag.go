@@ -69,7 +69,7 @@ Return ONLY valid JSON: {"tags": ["...", "..."]}`,
 	var result struct {
 		Tags []string `json:"tags"`
 	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+	if err := json.Unmarshal([]byte(llm.ExtractJSON(raw)), &result); err != nil {
 		slog.Warn("autotag: parse llm response", "entry", entry.ID, "err", err)
 		return
 	}
