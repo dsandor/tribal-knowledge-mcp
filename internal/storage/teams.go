@@ -198,10 +198,12 @@ type TeamStore interface {
 	RemoveTeamMember(ctx context.Context, userID, teamID string) error
 	ListUserTeams(ctx context.Context, userID string) ([]Team, error)
 	IsTeamMember(ctx context.Context, userID, teamID string) (bool, error)
-	// ClaimFirstSuperadmin promotes userID to superadmin iff no superadmin user
-	// currently exists, so the first user to sign in on a fresh deployment owns
-	// it. Atomic and idempotent; returns true only when it performed the
-	// promotion.
+	// ClaimFirstSuperadmin promotes userID to superadmin iff the deployment has
+	// no established owner yet — that is, no user already holds an owner-level
+	// role (superadmin or admin). This makes the first user to sign in on a fresh
+	// deployment the owner, while ensuring that once any admin/superadmin exists,
+	// no later sign-in is silently promoted (and thus bounced into onboarding).
+	// Atomic and idempotent; returns true only when it performed the promotion.
 	ClaimFirstSuperadmin(ctx context.Context, userID string) (bool, error)
 
 	// API keys
