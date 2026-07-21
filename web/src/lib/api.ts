@@ -351,6 +351,17 @@ export async function getMyTeams(): Promise<{ teams: { id: string; name: string 
   return r.json();
 }
 
+export interface MCPInfo {
+  http_enabled: boolean;
+  url: string;
+}
+
+export async function getMCPInfo(): Promise<MCPInfo> {
+  const r = await apiFetch('/api/mcp-info');
+  if (!r.ok) throw new Error('mcp info failed');
+  return r.json();
+}
+
 // Persist the client-side active team. Pass null to clear (default = home team / see-all).
 export function setActiveTeam(id: string | null): void {
   if (id) localStorage.setItem('tkm_active_team', id);
@@ -705,6 +716,15 @@ export interface APIKey {
 export async function listAPIKeys(): Promise<APIKey[]> {
   const r = await apiFetch('/api/api-keys');
   if (!r.ok) throw new Error('list api keys failed');
+  return r.json();
+}
+
+// listMyAPIKeys returns only the keys the caller may see (their own personal
+// keys, plus team keys if admin-or-above) — safe for any authenticated member,
+// unlike listAPIKeys() which hits the admin-only /api/api-keys endpoint.
+export async function listMyAPIKeys(): Promise<APIKey[]> {
+  const r = await apiFetch('/api/me/api-keys');
+  if (!r.ok) throw new Error('list my api keys failed');
   return r.json();
 }
 

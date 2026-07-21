@@ -323,21 +323,30 @@ func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if keys == nil {
 		keys = []storage.APIKey{}
 	}
-	type safeKey struct {
-		ID        string `json:"id"`
-		TeamID    string `json:"team_id"`
-		UserID    string `json:"user_id"`
-		KeyType   string `json:"key_type"`
-		Name      string `json:"name"`
-		Role      string `json:"role"`
-		RawKey    string `json:"raw_key"`
-		CreatedAt string `json:"created_at"`
-	}
-	safe := make([]safeKey, len(keys))
+	writeJSON(w, toSafeAPIKeys(keys))
+}
+
+// safeAPIKey is the JSON-safe projection of storage.APIKey returned by both
+// key-listing endpoints: handleListAPIKeys (admin, every key in the team) and
+// handleMyAPIKeys (any member, filtered to what they may see).
+type safeAPIKey struct {
+	ID        string `json:"id"`
+	TeamID    string `json:"team_id"`
+	UserID    string `json:"user_id"`
+	KeyType   string `json:"key_type"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	RawKey    string `json:"raw_key"`
+	CreatedAt string `json:"created_at"`
+}
+
+// toSafeAPIKeys projects storage keys into their JSON-safe shape.
+func toSafeAPIKeys(keys []storage.APIKey) []safeAPIKey {
+	safe := make([]safeAPIKey, len(keys))
 	for i, k := range keys {
-		safe[i] = safeKey{ID: k.ID, TeamID: k.TeamID, UserID: k.UserID, KeyType: k.KeyType, Name: k.Name, Role: k.Role, RawKey: k.RawKey, CreatedAt: k.CreatedAt.Format("2006-01-02T15:04:05Z")}
+		safe[i] = safeAPIKey{ID: k.ID, TeamID: k.TeamID, UserID: k.UserID, KeyType: k.KeyType, Name: k.Name, Role: k.Role, RawKey: k.RawKey, CreatedAt: k.CreatedAt.Format("2006-01-02T15:04:05Z")}
 	}
-	writeJSON(w, safe)
+	return safe
 }
 
 func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {

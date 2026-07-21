@@ -51,6 +51,9 @@ type mockStore struct {
 	// enrichPrefs maps a user id to that user's enrichment prefs (scalars +
 	// *Set flags). Mutated by Put/Add/Replace/Remove so web tests can drive it.
 	enrichPrefs map[string]*storage.EnrichmentPrefs
+	// apiKeysList is returned by ListAPIKeys (drives handleListAPIKeys /
+	// handleMyAPIKeys tests without a real store).
+	apiKeysList []storage.APIKey
 }
 
 // ensureEnrichPrefs lazily initializes and returns the prefs entry for userID.
@@ -397,7 +400,7 @@ func (m *mockStore) GetAPIKeyByHash(_ context.Context, hash string) (*storage.AP
 	return &storage.APIKey{ID: "test-key", TeamID: "test-team", Role: role, KeyHash: hash, UserID: m.apiKeyUserID}, nil
 }
 func (m *mockStore) ListAPIKeys(_ context.Context, teamID string) ([]storage.APIKey, error) {
-	return nil, nil
+	return m.apiKeysList, nil
 }
 func (m *mockStore) RevokeAPIKey(_ context.Context, id string) error          { return nil }
 func (m *mockStore) TouchAPIKey(_ context.Context, id string) error           { return nil }

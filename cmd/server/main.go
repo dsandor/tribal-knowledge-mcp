@@ -197,6 +197,7 @@ func main() {
 		WithDevBypass(cfg.DevBypassAuth).
 		WithRateLimitRPS(cfg.RateLimitRPS).
 		WithTrustXFF(cfg.TrustXFF).
+		WithMCPInfo(cfg.MCPHTTPAddr, cfg.MCPHTTPPath).
 		WithLive(liveHub, presence).
 		WithAISources(src).
 		WithEnrichDefaults(cfg.EnrichMinRelevance, cfg.EnrichMaxMemories).

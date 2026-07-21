@@ -50,6 +50,10 @@ type Server struct {
 	// defaults applied to per-user prefs scalars the user has not overridden.
 	enrichMinRelevance float64
 	enrichMaxMemories  int
+	// mcpHTTPAddr/mcpHTTPPath describe where the remote MCP endpoint listens,
+	// so /api/mcp-info can render accurate client-setup snippets.
+	mcpHTTPAddr string
+	mcpHTTPPath string
 }
 
 // NewServer wires all routes and returns a ready Server.
@@ -147,6 +151,14 @@ func (s *Server) WithTrustXFF(trust bool) *Server {
 	return s
 }
 
+// WithMCPInfo tells the web server where the remote MCP endpoint is exposed
+// (empty addr means remote MCP is disabled).
+func (s *Server) WithMCPInfo(addr, path string) *Server {
+	s.mcpHTTPAddr = addr
+	s.mcpHTTPPath = path
+	return s
+}
+
 // effectiveAuthMW returns RequireAuth normally, or a pass-through that injects
 // superadmin context when DEV_BYPASS_AUTH is enabled.
 // When a live presence tracker is configured, it is wired as a presence hook
@@ -221,6 +233,8 @@ func (s *Server) routes() {
 		r.Use(auth.ActiveTeamMiddleware(s.store))
 		r.Get("/api/me", s.handleMe)
 		r.Get("/api/me/teams", s.handleMyTeams)
+		r.Get("/api/mcp-info", s.handleMCPInfo)
+		r.Get("/api/me/api-keys", s.handleMyAPIKeys)
 		r.Get("/api/onboarding-status", s.handleOnboardingStatus)
 		r.Get("/api/stats", s.handleStats)
 		r.Get("/api/knowledge", s.handleKnowledgeList)
