@@ -2,9 +2,9 @@
 
 ## Current
 
-- **Phase:** 10
+- **Phase:** 11
 - **Status:** complete
-- **Last updated:** 2026-06-08
+- **Last updated:** 2026-07-21
 
 ## Phase Progress
 
@@ -20,6 +20,7 @@
 | 8 | Prompt Feedback & Active Learning | `complete` | — |
 | 9 | Bulk Import, Hybrid Search & Production Hardening | `complete` | — |
 | 10 | Knowledge Detail Editing, Curator Batch Actions & Search Highlighting | `complete` | — |
+| 11 | TODO Subsystem | `complete` | [2026-07-20-todo-subsystem-design.md](../docs/superpowers/specs/2026-07-20-todo-subsystem-design.md) / [2026-07-20-todo-subsystem.md](../docs/superpowers/plans/2026-07-20-todo-subsystem.md) |
 
 ## Notes
 
@@ -44,3 +45,4 @@
 - Security fixes: CSV formula injection (csvSafeCell prefixes =+-@ cells); XFF rate-limit bypass (TRUST_XFF=false default, opt-in with rightmost-entry policy)
 - Phase 9 complete: SearchHybrid on Store interface (FTS4/tsvector + vector cosine merge); BulkImport (transaction, title-hash dedup, per-entry error collection); POST /api/knowledge/import (JSON array + multipart CSV); GET /api/knowledge/export (JSON + CSV streaming, domain/type/tag filters); rate-limit middleware (token bucket, RATE_LIMIT_RPS, per-IP, 5m bucket pruning); maxBodySize middleware (1 MB POST/PUT guard); consistent writeError helper (code + message JSON on all 4xx/5xx); Import UI page (JSON paste + drag-and-drop CSV, preview table, result box); Knowledge Browser hybrid/semantic/keyword toggle; Go 9/9 tests pass, Vite clean
 - Phase 8 complete: usage_events/outcome_ratings/feed_activity storage tables (SQLite + Postgres); RecordUsage/RecordOutcome/GetTrendingEntries/GetWeakSignalEntries/RecordActivity/ListActivity on Store interface; `knowledge_use` MCP tool; GET /api/knowledge/trending and GET /api/activity REST endpoints; WeakSignalImprovement pipeline stage (haiku rewrites low-rated entries → draft for curator review); Dashboard Trending + Activity Feed widgets (polling 30s); Go build clean, Vite build clean (325 kB JS)
+- Phase 11 complete: TODO Subsystem — `TodoStore` interface + SQLite/Postgres implementations (todo_lists/todo_items/todo_external_links/todo_knowledge_refs, team-scoped, cascade delete); 12 MCP tools (todo_lists/todo_list_create/todo_list_update/todo_list_delete/todo_add/todo_get/todo_query/todo_update/todo_complete/todo_delete/todo_link_issue/todo_link_knowledge) + `todos://mine`/`todos://overdue`/`todos://list/{id}` resources + `manage_todos` prompt; REST API under `/api/todo-lists` + `/api/todos` (CRUD, filtered query, complete, external links, knowledge-ref replace) with PATCH-style partial updates; Kanban web UI (board + list view, detail drawer, Knowledge Detail "Related todos" panel, Dashboard "My Todos" widget); security hardening — external-link deletion scoped to (todo_id, link_id) so a link can't be deleted via cross-team ID guessing, knowledge-ref writes validate each entry ID against the caller's team, external link URLs restricted to http(s); Go 16/16 packages pass (556 tests), Vite build clean; REST smoke test (create list → create todo → PATCH status-only → link → knowledge-refs → filtered query → complete → list counts) verified end-to-end against a scratch SQLite DB

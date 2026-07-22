@@ -1008,3 +1008,159 @@ export async function unpinEntry(id: string): Promise<void> {
   const r = await apiFetch(`/api/enrichment/pins/${id}`, { method: 'DELETE' })
   if (!r.ok) throw new Error('unpin entry failed')
 }
+
+// ---------- Todos ----------
+
+export interface TodoExternalLink {
+  ID: string
+  TodoID: string
+  Provider: 'jira' | 'servicenow' | 'github' | 'gitlab' | 'other'
+  ExternalID: string
+  URL: string
+  ExternalStatus: string
+  SyncedAt: string | null
+  CreatedAt: string
+}
+
+export interface TodoItem {
+  ID: string
+  ListID: string
+  TeamID: string
+  Title: string
+  Notes: string
+  Status: 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled'
+  Priority: 'low' | 'medium' | 'high' | 'urgent'
+  CreatedBy: string
+  Assignee: string
+  DueDate: string | null
+  CompletedAt: string | null
+  Position: number
+  Tags: string[] | null
+  ExternalLinks: TodoExternalLink[] | null
+  KnowledgeRefs: string[] | null
+  CreatedAt: string
+  UpdatedAt: string
+}
+
+export interface TodoList {
+  ID: string
+  TeamID: string
+  Name: string
+  Description: string
+  Domain: string
+  Color: string
+  Archived: boolean
+  CreatedBy: string
+  CreatedAt: string
+  UpdatedAt: string
+  OpenCount: number
+  TotalCount: number
+}
+
+export interface TodoQueryFilters {
+  list_id?: string
+  status?: string   // comma-separated
+  assignee?: string // 'me' supported
+  priority?: string // comma-separated
+  tag?: string
+  overdue?: boolean
+  q?: string
+  entry_id?: string
+}
+
+async function jsonOrThrow<T>(r: Response): Promise<T> {
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
+    throw new Error(body.error ?? `HTTP ${r.status}`)
+  }
+  return r.json()
+}
+
+export async function listTodoLists(includeArchived = false): Promise<TodoList[]> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todo-lists${includeArchived ? '?archived=true' : ''}`))
+}
+
+export async function createTodoList(body: Partial<Pick<TodoList, 'Name' | 'Description' | 'Domain' | 'Color'>>): Promise<TodoList> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todo-lists`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+// PATCH semantics: omitted fields are unchanged server-side.
+export async function updateTodoList(id: string, body: Partial<Pick<TodoList, 'Name' | 'Description' | 'Domain' | 'Color' | 'Archived'>>): Promise<TodoList> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todo-lists/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+export async function deleteTodoList(id: string): Promise<void> {
+  await jsonOrThrow(await apiFetch(`${BASE}/todo-lists/${id}`, { method: 'DELETE' }))
+}
+
+export async function queryTodos(filters: TodoQueryFilters = {}): Promise<TodoItem[]> {
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== '' && v !== false) params.set(k, String(v))
+  }
+  const qs = params.toString()
+  return jsonOrThrow(await apiFetch(`${BASE}/todos${qs ? `?${qs}` : ''}`))
+}
+
+// PATCH semantics: omitted field = unchanged. DueDate: omit = unchanged,
+// '' = clear, else RFC3339 or YYYY-MM-DD.
+export type TodoItemPatch = Partial<Pick<TodoItem,
+  'ListID' | 'Title' | 'Notes' | 'Status' | 'Priority' | 'Assignee' | 'Position' | 'Tags'>> & {
+  DueDate?: string
+}
+
+export async function createTodo(body: TodoItemPatch & { ListID: string; Title: string }): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+export async function getTodo(id: string): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${id}`))
+}
+
+export async function updateTodo(id: string, body: TodoItemPatch): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+export async function completeTodo(id: string): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${id}/complete`, { method: 'POST' }))
+}
+
+// Drag-to-reorder: places `id` immediately after `afterId` within its own list
+// (afterId === '' moves it to the top), renumbering the whole list densely.
+export async function reorderTodo(id: string, afterId: string): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${id}/reorder`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ AfterID: afterId }),
+  }))
+}
+
+export async function deleteTodo(id: string): Promise<void> {
+  await jsonOrThrow(await apiFetch(`${BASE}/todos/${id}`, { method: 'DELETE' }))
+}
+
+export async function addTodoLink(todoId: string, body: { Provider: string; ExternalID?: string; URL?: string; ExternalStatus?: string }): Promise<{ ID: string }> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${todoId}/links`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }))
+}
+
+export async function removeTodoLink(todoId: string, linkId: string): Promise<void> {
+  await jsonOrThrow(await apiFetch(`${BASE}/todos/${todoId}/links/${linkId}`, { method: 'DELETE' }))
+}
+
+export async function setTodoKnowledgeRefs(todoId: string, entryIds: string[]): Promise<TodoItem> {
+  return jsonOrThrow(await apiFetch(`${BASE}/todos/${todoId}/knowledge-refs`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ EntryIDs: entryIds }),
+  }))
+}
+
+export async function todosForEntry(entryId: string): Promise<TodoItem[]> {
+  return queryTodos({ entry_id: entryId })
+}

@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import {
   BookOpen, Star, CheckCircle, XCircle, GitMerge, Sparkles, Bot, Activity,
-  Zap, ThumbsUp, LogIn,
+  Zap, ThumbsUp, LogIn, ListTodo, CheckSquare,
 } from 'lucide-react'
 import type { ActivityEvent } from './api'
 
@@ -34,6 +34,8 @@ export function eventIcon(type: string): IconElement {
     case 'improvement_drafted':    return <ThumbsUp style={{ ...s, color: '#a78bfa' }} />
     case 'agent_generated':        return <Bot style={{ ...s, color: '#34d399' }} />
     case 'signin':                 return <LogIn style={{ ...s, color: '#94a3b8' }} />
+    case 'todo_created':           return <ListTodo style={{ ...s, color: '#38bdf8' }} />
+    case 'todo_completed':         return <CheckSquare style={{ ...s, color: '#22c55e' }} />
     // Legacy field names (keep compatible during any mixed-traffic period)
     case 'stored':                 return <BookOpen style={{ ...s, color: '#22c55e' }} />
     case 'rated':                  return <Star style={{ ...s, color: '#facc15' }} />
@@ -56,6 +58,8 @@ export function eventLabel(type: string, meta?: Record<string, string>): string 
     case 'improvement_drafted':    return `Improvement drafted${domain}`
     case 'agent_generated':        return `Agent generated${domain}`
     case 'signin':                 return `Signed in`
+    case 'todo_created':           return `Created todo${meta?.title ? ` "${meta.title}"` : ''}`
+    case 'todo_completed':         return `Completed todo${meta?.title ? ` "${meta.title}"` : ''}`
     // Legacy
     case 'stored':                 return `New entry added${domain}`
     case 'rated':                  return `Entry rated${meta?.rating ? ` ${meta.rating}★` : ''}${domain}`

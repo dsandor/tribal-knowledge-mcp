@@ -8,6 +8,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TODO Subsystem (Phase 11)**
+  - Todo lists/items with a rich `open → in_progress → blocked → done → cancelled` workflow, `low/medium/high/urgent` priority, due dates, assignment, tags, and manual ordering; 2-tier model (`TodoList` container + `TodoItem`), team-scoped, identity resolved via `EffectiveActorID()`
+  - `TodoStore` interface with SQLite and PostgreSQL implementations (`internal/storage/todos*.go`, `postgres_todos.go`)
+  - 12 MCP tools (`todo_lists`, `todo_list_create`, `todo_list_update`, `todo_list_delete`, `todo_add`, `todo_get`, `todo_query`, `todo_update`, `todo_complete`, `todo_delete`, `todo_link_issue`, `todo_link_knowledge`) with descriptions written to teach the calling LLM the workflow
+  - `todos://mine`, `todos://overdue`, `todos://list/{id}` MCP resources and a `manage_todos` MCP prompt
+  - REST API under `/api/todo-lists` and `/api/todos` (CRUD, filtered query, complete, reorder, external links, knowledge-ref replace) backing the web UI
+  - Kanban web UI: Todos nav page with board (drag between status columns, drag-to-reorder within columns with dense per-list renumbering) and list-view toggle, list sidebar, assignee/priority/due filters, todo detail drawer (full edit, external links, knowledge refs), a "Related todos" panel on Knowledge Detail, and a Dashboard "My Todos" widget
+  - External issue-tracker link schema for Jira, ServiceNow, GitHub Issues, and GitLab Issues (`todo_external_links` table) — data model only, no live sync/integration built
+  - Bidirectional knowledge linking via a `todo_knowledge_refs` join table (todo → entries, and entry → todos reverse lookup)
+  - Security hardening: external link deletion is team-scoped (rejects cross-team link IDs); knowledge-ref writes validate each entry ID against the caller's team before linking (cross-tenant references are rejected); external link URLs are restricted to `http(s)://` schemes
 - **Per-User Knowledge Visibility & Cross-Team Sharing**
   - Per-user suppression: a user can hide an individual entry, mute an author, or mute a tag/domain so those entries stop influencing *their* searches, `enrich_context`, and lists — without affecting teammates. A user's own authored entries are never hidden by their rules
   - Applies to user-scoped tokens (which now carry the caller's `user_id`) and web sessions; shared team tokens keep the full unfiltered team view

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
-  api, fetchTrending, fetchUsage, fetchContributions, getOnboardingStatus,
-  type Stats, type TrendingEntry,
+  api, fetchTrending, fetchUsage, fetchContributions, getOnboardingStatus, queryTodos,
+  type Stats, type TrendingEntry, type TodoItem,
 } from '@/lib/api'
+import { priorityColor, dueTone } from '@/components/todo/todoTheme'
 import {
   BookOpen, Network, Bot, Zap, Users, TrendingUp,
 } from 'lucide-react'
@@ -341,8 +342,11 @@ export default function Dashboard() {
   const [trending,    setTrending]     = useState<TrendingEntry[] | null>(null)
   const [usageData,   setUsageData]    = useState<UsageData | null>(null)
   const [contribData, setContribData]  = useState<ContributionsData | null>(null)
+  const [myTodos,     setMyTodos]      = useState<TodoItem[]>([])
   const [error,       setError]        = useState<string | null>(null)
   const [loaded,      setLoaded]       = useState(false)
+
+  const overdueCount = myTodos.filter(t => dueTone(t) === 'overdue').length
 
   // Extra counters derived from analytics
   const totalUsage = usageData ? usageData.by_domain.reduce((s, d) => s + d.total_usage, 0) : 0
@@ -408,6 +412,13 @@ export default function Dashboard() {
     const id = setInterval(fetchAnalytics, 30_000)
     return () => clearInterval(id)
   }, [fetchAnalytics])
+
+  // ── My Todos: one-shot load for the dashboard widget ──
+  useEffect(() => {
+    queryTodos({ assignee: 'me', status: 'open,in_progress,blocked' })
+      .then(setMyTodos)
+      .catch(() => setMyTodos([]))
+  }, [])
 
   if (error && !loaded) return <Alert severity="error">Error: {error}</Alert>
   if (!loaded) return (
@@ -550,6 +561,42 @@ export default function Dashboard() {
               />
               <CardContent sx={{ pt: 0 }}>
                 <ContributorsPanel data={contribData} />
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        {/* ── My Todos widget ── */}
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, md: 4 }}>
+            <Card>
+              <CardHeader
+                title={<Typography variant="subtitle2">My Todos</Typography>}
+                subheader={<Typography variant="caption" color="text.secondary">Open items assigned to you</Typography>}
+                sx={{ pb: 1 }}
+              />
+              <CardContent sx={{ pt: 0 }}>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
+                  <Typography sx={{ fontSize: 24, fontWeight: 700 }}>{myTodos.length}</Typography>
+                  <Typography sx={{ fontSize: 12 }} color="text.secondary">open</Typography>
+                  {overdueCount > 0 && (
+                    <Typography sx={{ fontSize: 12, color: '#f87171', ml: 1 }}>{overdueCount} overdue</Typography>
+                  )}
+                </Box>
+                {myTodos.slice(0, 5).map(t => (
+                  <Box key={t.ID} component={Link} to="/todos" sx={{
+                    display: 'flex', alignItems: 'center', gap: 1, py: 0.5,
+                    textDecoration: 'none', color: 'inherit', '&:hover': { opacity: 0.8 },
+                  }}>
+                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: priorityColor(t.Priority), flexShrink: 0 }} />
+                    <Typography sx={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.Title}
+                    </Typography>
+                  </Box>
+                ))}
+                {myTodos.length === 0 && (
+                  <Typography sx={{ fontSize: 12 }} color="text.secondary">Nothing assigned to you 🎉</Typography>
+                )}
               </CardContent>
             </Card>
           </Grid>

@@ -53,7 +53,8 @@ type mockStore struct {
 	enrichPrefs map[string]*storage.EnrichmentPrefs
 	// apiKeysList is returned by ListAPIKeys (drives handleListAPIKeys /
 	// handleMyAPIKeys tests without a real store).
-	apiKeysList []storage.APIKey
+	apiKeysList       []storage.APIKey
+	storage.TodoStore // embedded nil interface — todo methods panic if called; todo tests use a real store
 }
 
 // ensureEnrichPrefs lazily initializes and returns the prefs entry for userID.

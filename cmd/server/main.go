@@ -31,6 +31,7 @@ type combinedStore interface {
 	storage.AgentStore
 	storage.TeamStore
 	storage.RuleStore
+	storage.TodoStore
 }
 
 func main() {
@@ -252,6 +253,7 @@ func main() {
 	mcpServer := internalmcp.NewMCPServer(store, src, liveHub)
 	internalmcp.RegisterAnalysisTools(mcpServer, store)
 	internalmcp.RegisterRuleTools(mcpServer, store)
+	internalmcp.RegisterTodoTools(mcpServer, store)
 	internalmcp.RegisterAgentTools(mcpServer, store)
 	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, src, liveHub)
 	internalmcp.RegisterVisibilityTools(mcpServer, store)

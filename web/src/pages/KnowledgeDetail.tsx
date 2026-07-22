@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { api, searchSimilar, addVisibilityRule, getMyTeams, setEntryAuthor, pinEntry, type KnowledgeEntry } from '@/lib/api'
+import { api, searchSimilar, addVisibilityRule, getMyTeams, setEntryAuthor, pinEntry, todosForEntry, type KnowledgeEntry, type TodoItem } from '@/lib/api'
+import { priorityColor, statusLabel } from '@/components/todo/todoTheme'
 import { ArrowLeft, Star, Pencil, Pin, Trash2, EyeOff, UserX, Share2, Copy, Check, X } from 'lucide-react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -79,6 +80,9 @@ export default function KnowledgeDetail() {
 
   // similar entries
   const [similar, setSimilar] = useState<KnowledgeEntry[]>([])
+
+  // related todos
+  const [relatedTodos, setRelatedTodos] = useState<TodoItem[]>([])
 
   // visibility (hide/mute) feedback
   const [visMsg, setVisMsg] = useState<string | null>(null)
@@ -192,6 +196,16 @@ export default function KnowledgeDetail() {
         }
       })
       .catch(e => { if (!ignore) setError(e instanceof Error ? e.message : String(e)) })
+    return () => { ignore = true }
+  }, [id])
+
+  // Related todos linked to this entry. Resilient to failure.
+  useEffect(() => {
+    if (!id) return
+    let ignore = false
+    todosForEntry(id)
+      .then(results => { if (!ignore) setRelatedTodos(results) })
+      .catch(() => { if (!ignore) setRelatedTodos([]) })
     return () => { ignore = true }
   }, [id])
 
@@ -583,6 +597,39 @@ export default function KnowledgeDetail() {
                     <Chip label={s.Domain} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
                   )}
                   <Chip label={s.Type} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+                </ListItem>
+              ))}
+            </List>
+          </CardContent>
+        </Card>
+      )}
+
+      {relatedTodos.length > 0 && (
+        <Card>
+          <CardHeader title={<Typography variant="subtitle2">Related Todos</Typography>} sx={{ pb: 0 }} />
+          <CardContent sx={{ pt: 1 }}>
+            <List disablePadding>
+              {relatedTodos.map(t => (
+                <ListItem key={t.ID} disableGutters sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: priorityColor(t.Priority), flexShrink: 0 }} />
+                  <Typography
+                    component={Link}
+                    to="/todos"
+                    variant="body2"
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: 'text.primary',
+                      textDecoration: 'none',
+                      '&:hover': { color: 'primary.light' },
+                    }}
+                  >
+                    {t.Title}
+                  </Typography>
+                  <Chip label={statusLabel(t.Status)} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
                 </ListItem>
               ))}
             </List>

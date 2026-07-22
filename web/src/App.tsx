@@ -7,6 +7,7 @@ import Layout from '@/components/Layout'
 import Dashboard from '@/pages/Dashboard'
 import KnowledgeBrowser from '@/pages/KnowledgeBrowser'
 import KnowledgeDetail from '@/pages/KnowledgeDetail'
+import Todos from '@/pages/Todos'
 import Clusters from '@/pages/Clusters'
 import Datasets from '@/pages/Datasets'
 import Agents from '@/pages/Agents'
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="knowledge" element={<KnowledgeBrowser />} />
           <Route path="knowledge/:id" element={<KnowledgeDetail />} />
+          <Route path="todos" element={<Todos />} />
           <Route path="clusters" element={<Clusters />} />
           <Route path="datasets" element={<Datasets />} />
           <Route path="agents" element={<Agents />} />

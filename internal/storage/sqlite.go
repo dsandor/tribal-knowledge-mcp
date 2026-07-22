@@ -442,6 +442,60 @@ func (s *SQLiteStore) migrate() error {
 		return fmt.Errorf("migrate shares: %w", err)
 	}
 
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS todo_lists (
+			id          TEXT PRIMARY KEY,
+			team_id     TEXT NOT NULL DEFAULT '',
+			name        TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			domain      TEXT NOT NULL DEFAULT '',
+			color       TEXT NOT NULL DEFAULT '',
+			archived    INTEGER NOT NULL DEFAULT 0,
+			created_by  TEXT NOT NULL DEFAULT '',
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS todo_items (
+			id           TEXT PRIMARY KEY,
+			list_id      TEXT NOT NULL REFERENCES todo_lists(id) ON DELETE CASCADE,
+			team_id      TEXT NOT NULL DEFAULT '',
+			title        TEXT NOT NULL,
+			notes        TEXT NOT NULL DEFAULT '',
+			status       TEXT NOT NULL DEFAULT 'open',
+			priority     TEXT NOT NULL DEFAULT 'medium',
+			created_by   TEXT NOT NULL DEFAULT '',
+			assignee     TEXT NOT NULL DEFAULT '',
+			due_date     DATETIME,
+			completed_at DATETIME,
+			position     INTEGER NOT NULL DEFAULT 0,
+			tags         TEXT NOT NULL DEFAULT '[]',
+			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_todo_items_list ON todo_items(list_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_todo_items_team_status ON todo_items(team_id, status)`,
+		`CREATE TABLE IF NOT EXISTS todo_external_links (
+			id              TEXT PRIMARY KEY,
+			todo_id         TEXT NOT NULL REFERENCES todo_items(id) ON DELETE CASCADE,
+			provider        TEXT NOT NULL,
+			external_id     TEXT NOT NULL DEFAULT '',
+			url             TEXT NOT NULL DEFAULT '',
+			external_status TEXT NOT NULL DEFAULT '',
+			synced_at       DATETIME,
+			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_todo_links_todo ON todo_external_links(todo_id)`,
+		`CREATE TABLE IF NOT EXISTS todo_knowledge_refs (
+			todo_id  TEXT NOT NULL REFERENCES todo_items(id) ON DELETE CASCADE,
+			entry_id TEXT NOT NULL,
+			PRIMARY KEY (todo_id, entry_id)
+		)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("create todo tables: %w", err)
+		}
+	}
+
 	return nil
 }
 

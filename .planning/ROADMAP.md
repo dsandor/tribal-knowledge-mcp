@@ -199,6 +199,21 @@ A self-improving team knowledge engine: single Go binary that captures tribal kn
 
 ---
 
+### Phase 11 — TODO Subsystem
+**Goal:** Make todos a first-class citizen alongside knowledge entries — teams and LLMs can create, view, edit, complete, and delete todos, grouped into named lists, with a rich status/priority/due workflow, optional knowledge-entry links, and a schema-only external issue-tracker link (Jira/ServiceNow/GitHub/GitLab — no live sync).
+
+**Deliverables:**
+- `TodoStore` interface (`internal/storage/todos.go`) with SQLite (`todos_sqlite.go`) and PostgreSQL (`postgres_todos.go`) implementations; tables `todo_lists`, `todo_items`, `todo_external_links`, `todo_knowledge_refs`, all team-scoped with cascade delete
+- 12 MCP tools (`internal/mcp/todo_tools.go`): `todo_lists`, `todo_list_create`, `todo_list_update`, `todo_list_delete`, `todo_add`, `todo_get`, `todo_query`, `todo_update`, `todo_complete`, `todo_delete`, `todo_link_issue`, `todo_link_knowledge` — descriptions written to teach the calling LLM the intended workflow
+- MCP resources `todos://mine`, `todos://overdue`, `todos://list/{id}`; MCP prompt `manage_todos`
+- REST API (`internal/web/todo_handlers.go`): `/api/todo-lists` (+ `/:id`, `/:id/items`) and `/api/todos` (+ `/:id`, `/:id/complete`, `/:id/reorder`, `/:id/links`, `/:id/links/:linkId`, `/:id/knowledge-refs`), with PATCH-style partial updates on `PUT /api/todos/:id`
+- Kanban web UI: Todos nav page with drag-and-drop board (Open/In Progress/Blocked/Done columns, plus drag-to-reorder within a column with dense per-list renumbering via `/api/todos/:id/reorder`) and list-view toggle, list sidebar, assignee/priority/due filters, todo detail drawer (full edit, external links, knowledge refs); "Related todos" panel on Knowledge Detail; Dashboard "My Todos" widget
+- Security hardening: external-link deletion scoped to `(todo_id, link_id)` (rejects cross-team link-ID guessing); knowledge-ref writes validate each entry ID against the caller's team before linking; external link URLs restricted to `http(s)://`
+
+**Exit criteria:** A user or LLM can create a todo list, add items with priority/due/assignee, transition status through the workflow via drag-and-drop or MCP tools, attach an external tracker link and knowledge refs, and see consistent state across the web UI, REST API, and MCP layer. `go build ./...`, `go test ./...`, and `cd web && npm run build` all pass clean.
+
+---
+
 ## Sequence
 
 ```
@@ -223,7 +238,9 @@ Each phase produces a working, testable increment. Phases 1–3 are backend-only
 | 6 | Polish & Developer Experience | `complete` |
 | 7 | PostgreSQL Adapter + Local Dev + Onboarding | `complete` |
 | 8 | Prompt Feedback & Active Learning | `complete` |
-| 9 | Bulk Import, Hybrid Search & Production Hardening | `planned` |
+| 9 | Bulk Import, Hybrid Search & Production Hardening | `complete` |
+| 10 | Knowledge Detail Editing, Curator Batch Actions & Search Highlighting | `complete` |
+| 11 | TODO Subsystem | `complete` |
 
 ---
 

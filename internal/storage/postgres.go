@@ -149,6 +149,9 @@ func (s *PostgresStore) migrate() error {
 	if err := s.migrateRules(context.Background()); err != nil {
 		return fmt.Errorf("migrate rules: %w", err)
 	}
+	if err := s.migrateTodos(context.Background()); err != nil {
+		return fmt.Errorf("migrate todos: %w", err)
+	}
 	if err := s.migrateUsage(context.Background()); err != nil {
 		return fmt.Errorf("migrate usage: %w", err)
 	}

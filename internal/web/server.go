@@ -21,6 +21,7 @@ import (
 type AllStore interface {
 	storage.AgentStore
 	storage.TeamStore
+	storage.TodoStore
 }
 
 // LiveHub extends live.EventBus with the subscriber count needed for capacity
@@ -276,6 +277,23 @@ func (s *Server) routes() {
 		r.Post("/api/knowledge/{id}/share", s.handleCreateShare)
 		r.Get("/api/share/{token}", s.handleGetShare)
 		r.Post("/api/share/{token}/import", s.handleImportShare)
+		// Todo lists + items.
+		r.Get("/api/todo-lists", s.handleTodoListList)
+		r.Post("/api/todo-lists", s.handleTodoListCreate)
+		r.Get("/api/todo-lists/{id}", s.handleTodoListGet)
+		r.Put("/api/todo-lists/{id}", s.handleTodoListUpdate)
+		r.Delete("/api/todo-lists/{id}", s.handleTodoListDelete)
+		r.Get("/api/todo-lists/{id}/items", s.handleTodoListItems)
+		r.Get("/api/todos", s.handleTodoQuery)
+		r.Post("/api/todos", s.handleTodoCreate)
+		r.Get("/api/todos/{id}", s.handleTodoGet)
+		r.Put("/api/todos/{id}", s.handleTodoUpdate)
+		r.Delete("/api/todos/{id}", s.handleTodoDelete)
+		r.Post("/api/todos/{id}/complete", s.handleTodoComplete)
+		r.Post("/api/todos/{id}/reorder", s.handleTodoReorder)
+		r.Post("/api/todos/{id}/links", s.handleTodoLinkAdd)
+		r.Delete("/api/todos/{id}/links/{linkId}", s.handleTodoLinkRemove)
+		r.Put("/api/todos/{id}/knowledge-refs", s.handleTodoRefsSet)
 	})
 
 	// Curator routes

@@ -27,6 +27,7 @@ A general-purpose tribal knowledge server for teams that use LLMs. It captures w
 - [First-Time Setup](#first-time-setup)
 - [Backup & Restore / Migration](#backup--restore--migration)
 - [MCP Tools Reference](#mcp-tools-reference)
+- [Todo REST API](#todo-rest-api)
 - [Building and Publishing Images](#building-and-publishing-images)
 - [License](#license)
 
@@ -629,6 +630,45 @@ web UI: the file you receive contains secrets and must be protected accordingly.
 | `rule_list` | List domain rules surfaced by the pipeline |
 | `prompt_suggest` | Suggest prompt improvements based on team knowledge |
 | `enhance_with_context` | Enhance a prompt using domain rules, similar entries, and the best agent for the domain |
+| `todo_lists` | List the team's todo lists with open/total item counts |
+| `todo_list_create` | Create a new todo list (a named container for related items) |
+| `todo_list_update` | Rename, re-describe, or archive a todo list |
+| `todo_list_delete` | Delete a todo list and all its items |
+| `todo_add` | Create a todo item by list ID or list name (auto-creates the list) |
+| `todo_get` | Fetch a todo item in full, including external links and knowledge refs |
+| `todo_query` | Search todos by status, assignee, priority, due date, list, tag, or keyword |
+| `todo_update` | Patch a todo's fields, including status transitions and assignment |
+| `todo_complete` | Mark a todo done (shortcut for a status update) |
+| `todo_delete` | Permanently delete a todo item |
+| `todo_link_issue` | Attach an external issue-tracker reference (Jira, ServiceNow, GitHub, GitLab) |
+| `todo_link_knowledge` | Set which knowledge entries a todo references (replaces the current set) |
+
+MCP resources: `todos://mine` (open/in-progress/blocked todos assigned to the caller), `todos://overdue` (past-due, unfinished todos), `todos://list/{id}` (all items in one list). MCP prompt: `manage_todos` (explains the todo tool workflow to the calling LLM).
+
+---
+
+## Todo REST API
+
+REST endpoints backing the Todos web UI (Kanban board + list view). All routes are team-scoped and require the same auth as the rest of `/api` (see [Environment Variable Reference](#environment-variable-reference) and [First-Time Setup](#first-time-setup)).
+
+| Method + path | Action |
+|---|---|
+| `GET /api/todo-lists` | List todo lists for the team (`?archived=true` to include archived) |
+| `POST /api/todo-lists` | Create a todo list |
+| `GET /api/todo-lists/:id` | Get a todo list |
+| `PUT /api/todo-lists/:id` | Update a todo list (name, description, domain, color, archived) |
+| `DELETE /api/todo-lists/:id` | Delete a todo list and all its items |
+| `GET /api/todo-lists/:id/items` | List items in a list |
+| `GET /api/todos` | Filtered todo query — `status`, `assignee` (`me` for the caller), `priority`, `list_id`, `tag`, `overdue`, `q`, `entry_id` (reverse knowledge-ref lookup) |
+| `POST /api/todos` | Create a todo item |
+| `GET /api/todos/:id` | Get a todo item in full (external links + knowledge refs included) |
+| `PUT /api/todos/:id` | Patch a todo item — only the fields present in the body change |
+| `DELETE /api/todos/:id` | Delete a todo item |
+| `POST /api/todos/:id/complete` | Mark a todo done (sets `CompletedAt`) |
+| `POST /api/todos/:id/reorder` | Drag-to-reorder — body `{"AfterID": "<id or ''>"}` places the todo immediately after `AfterID` within its own list (`''` = top); renumbers the whole list densely; 400 if `AfterID` belongs to another list |
+| `POST /api/todos/:id/links` | Attach an external tracker link (`jira`, `servicenow`, `github`, `gitlab`, `other`) |
+| `DELETE /api/todos/:id/links/:linkId` | Remove an external tracker link |
+| `PUT /api/todos/:id/knowledge-refs` | Replace a todo's linked knowledge entries |
 
 ---
 

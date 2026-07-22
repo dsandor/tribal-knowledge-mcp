@@ -11,7 +11,7 @@ import Typography from '@mui/material/Typography'
 import {
   LayoutDashboard, BookOpen, Upload, Network, Database,
   Bot, BarChart2, Clock, Settings, Users, ShieldCheck, Activity,
-  SlidersHorizontal,
+  SlidersHorizontal, ListTodo,
 } from 'lucide-react'
 import { Psychology as BrainIcon } from '@mui/icons-material'
 import { getMe } from '@/lib/api'
@@ -23,6 +23,7 @@ const DRAWER_WIDTH = 220
 const baseNav = [
   { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { to: '/knowledge', label: 'Knowledge', Icon: BookOpen },
+  { to: '/todos', label: 'Todos', Icon: ListTodo },
   { to: '/import', label: 'Import', Icon: Upload },
   { to: '/clusters', label: 'Clusters', Icon: Network },
   { to: '/pipeline', label: 'Pipeline', Icon: Activity },
