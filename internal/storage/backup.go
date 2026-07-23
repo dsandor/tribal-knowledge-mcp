@@ -47,6 +47,7 @@ func validTableName(t string) bool {
 		"entries", "clusters", "pipeline_runs", "dataset_snapshots",
 		"analysis_cache", "rules", "agents", "agent_versions",
 		"activity_log", "usage_events", "outcome_ratings", "feed_activity",
+		"ft_sessions", "ft_turns", "ft_preferences", "ft_session_knowledge",
 		"vec_entries", "entry_embeddings", "embeddings",
 		"entry_chunks", "vec_chunks", "chunk_embeddings":
 		return true

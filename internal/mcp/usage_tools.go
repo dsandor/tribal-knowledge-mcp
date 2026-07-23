@@ -24,6 +24,7 @@ func RegisterUsageTools(s *server.MCPServer, store storage.Store, bus live.Event
 			mcplib.WithString("tool", mcplib.Required(), mcplib.Description("Which MCP tool produced the suggestion (e.g. \"prompt_suggest\")")),
 			mcplib.WithNumber("selected_index", mcplib.Description("Which result index was selected (default 0)")),
 			mcplib.WithString("user_id", mcplib.Description("Identifier for the user accepting the suggestion")),
+			mcplib.WithString("session_id", mcplib.Description("Optional FT capture session_id from session_start")),
 		),
 		logTool("knowledge_use", HandleKnowledgeUse(store, bus)),
 	)
@@ -61,6 +62,10 @@ func HandleKnowledgeUse(store storage.Store, bus live.EventBus) func(context.Con
 
 		if err := store.RecordUsage(ctx, event); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("record usage: %v", err)), nil
+		}
+
+		if sid := req.GetString("session_id", ""); sid != "" {
+			linkSessionKnowledge(ctx, store, sid, entryID, storage.FTKnowRetrieved)
 		}
 
 		// Publish live event (best-effort, nil-safe).

@@ -30,6 +30,10 @@ var coveredTables = []string{
 	"usage_events",
 	"outcome_ratings",
 	"feed_activity",
+	"ft_sessions",
+	"ft_turns",
+	"ft_preferences",
+	"ft_session_knowledge",
 }
 
 // CoveredTables returns the ordered list of backed-up tables (a copy).

@@ -157,6 +157,11 @@ func HandleKnowledgeStore(store storage.Store, src *aiconfig.Sources, bus ...liv
 			return mcplib.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 		}
 
+		// Optional FT session linkage (best-effort).
+		if sid := req.GetString("session_id", ""); sid != "" {
+			linkSessionKnowledge(ctx, store, sid, id, storage.FTKnowStored)
+		}
+
 		// Fire-and-forget auto-categorization; never blocks the tool response.
 		// src is always non-nil here — the embedder resolution above already
 		// dereferenced it.

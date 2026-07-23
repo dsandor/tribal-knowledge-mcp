@@ -16,6 +16,8 @@ const serverInstructions = `This server is the team's source of truth for how wo
 
 BEFORE responding to ANY user request, call enrich_context with the user's message to pull applicable rules and relevant knowledge. Apply what it returns. If it reports missing_inputs, ask the user for that context before proceeding.
 
+For non-trivial tasks, also call session_start first and keep the returned session_id. Pass session_id to enrich_context, knowledge_store, knowledge_use, and knowledge_rate. Log meaningful steps with session_turn. If the user corrects your output, call session_prefer with chosen vs rejected text. Call session_complete with an outcome_rating when the task finishes.
+
 AFTER completing a non-trivial task, call knowledge_store to capture reusable learnings, and knowledge_use + knowledge_rate on the entries you relied on so the knowledge base self-improves over time.
 
 When in doubt, consult the server — calls are cheap and idempotent.`
@@ -84,6 +86,7 @@ func NewMCPServer(store storage.Store, src *aiconfig.Sources, bus ...live.EventB
 			mcplib.WithString("team", mcplib.Description("Team identifier")),
 			mcplib.WithArray("tags", mcplib.Description("Additional tags (inline #hashtags in content are also extracted automatically)")),
 			mcplib.WithBoolean("dry_run", mcplib.Description("If true, validate and preview the entry without storing it. Returns the entry that would be stored including its content_hash.")),
+			mcplib.WithString("session_id", mcplib.Description("Optional FT capture session_id from session_start — links the stored entry to the session")),
 		),
 		logTool("knowledge_store", HandleKnowledgeStore(store, src, eventBus)),
 	)

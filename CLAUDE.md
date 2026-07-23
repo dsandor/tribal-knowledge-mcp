@@ -8,6 +8,8 @@ This project is served by the tribal-knowledge MCP server. When the MCP server i
 
 **At the start of every request:** Call `enrich_context` with the user's message before planning or drafting a response. This pulls applicable team rules and relevant knowledge. Apply what it returns — improved_prompt, applicable_rules, and relevant_knowledge.
 
+**For non-trivial tasks:** Call `session_start` first and keep `session_id`. Pass `session_id` to `enrich_context`, `knowledge_store`, `knowledge_use`, and `knowledge_rate`. Log steps with `session_turn`. If the user corrects output, call `session_prefer` (chosen vs rejected). Call `session_complete` with `outcome_rating` when done.
+
 **After completing any non-trivial task:** Call `knowledge_store` to capture reusable learnings. Call `knowledge_use` and `knowledge_rate` on any entries you relied on.
 
-**Learning loop:** The knowledge base improves through use — every rating and usage signal makes future retrieval better. Treat `knowledge_rate` as part of task completion, not optional.
+**Learning loop:** The knowledge base improves through use — every rating and usage signal makes future retrieval better. Treat `knowledge_rate` as part of task completion, not optional. Session traces enable future fine-tuning via `export-train`.

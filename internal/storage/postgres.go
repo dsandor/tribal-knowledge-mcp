@@ -164,6 +164,9 @@ func (s *PostgresStore) migrate() error {
 	if err := s.migrateShares(context.Background()); err != nil {
 		return fmt.Errorf("migrate shares: %w", err)
 	}
+	if err := s.migrateFTSessions(context.Background()); err != nil {
+		return fmt.Errorf("migrate ft sessions: %w", err)
+	}
 	if err := s.backfillChunks(context.Background()); err != nil {
 		return fmt.Errorf("backfill chunks: %w", err)
 	}

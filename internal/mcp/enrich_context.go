@@ -32,6 +32,7 @@ func RegisterEnrichContext(s *server.MCPServer, store storage.Store, src *aiconf
 			mcplib.WithString("team", mcplib.Description("Team identifier for scoping rules")),
 			mcplib.WithString("category", mcplib.Description("Domain/category for scoping rules and knowledge search")),
 			mcplib.WithString("user", mcplib.Description("User identifier for user-scoped rules")),
+			mcplib.WithString("session_id", mcplib.Description("Optional FT capture session_id from session_start — logs enrich turn and links retrieved entries")),
 		),
 		logTool("enrich_context", HandleEnrichContext(store, src, bus, defaults)),
 	)
@@ -256,6 +257,40 @@ func HandleEnrichContext(store storage.Store, src *aiconfig.Sources, bus live.Ev
 			CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			slog.Warn("enrich_context: record activity", "err", err)
+		}
+
+		// Optional FT session capture (best-effort).
+		if sid := req.GetString("session_id", ""); sid != "" {
+			entryIDs := make([]string, 0, len(relevantKnowledge))
+			for _, k := range relevantKnowledge {
+				entryIDs = append(entryIDs, k.ID)
+				linkSessionKnowledge(ctx, store, sid, k.ID, storage.FTKnowRetrieved)
+			}
+			ruleIDs := make([]string, 0, len(applicableRules))
+			for _, r := range applicableRules {
+				ruleIDs = append(ruleIDs, r.ID)
+			}
+			// Log raw prompt + improved prompt as enrich turns.
+			appendSessionTurn(ctx, store, storage.FTTurn{
+				SessionID: sid,
+				Role:      storage.FTRoleUser,
+				Kind:      storage.FTKindEnrich,
+				Content:   prompt,
+				EntryIDs:  entryIDs,
+				RuleIDs:   ruleIDs,
+				ToolName:  "enrich_context",
+			})
+			if improvedPrompt != "" && improvedPrompt != prompt {
+				appendSessionTurn(ctx, store, storage.FTTurn{
+					SessionID: sid,
+					Role:      storage.FTRoleSystemInject,
+					Kind:      storage.FTKindEnrich,
+					Content:   improvedPrompt,
+					EntryIDs:  entryIDs,
+					RuleIDs:   ruleIDs,
+					ToolName:  "enrich_context",
+				})
+			}
 		}
 
 		data, err := json.Marshal(resp)

@@ -442,6 +442,10 @@ func (s *SQLiteStore) migrate() error {
 		return fmt.Errorf("migrate shares: %w", err)
 	}
 
+	if err := s.migrateFTSessions(); err != nil {
+		return fmt.Errorf("migrate ft sessions: %w", err)
+	}
+
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS todo_lists (
 			id          TEXT PRIMARY KEY,

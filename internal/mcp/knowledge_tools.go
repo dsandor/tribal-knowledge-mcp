@@ -32,6 +32,7 @@ func RegisterKnowledgeExtTools(s *server.MCPServer, store storage.Store, src *ai
 			mcplib.WithDescription("Call after relying on a knowledge entry — rate its helpfulness 1 (not useful) to 5 (excellent). This feedback ranks future retrieval. Treat rating as part of finishing the task, not optional."),
 			mcplib.WithString("id", mcplib.Required(), mcplib.Description("Entry UUID")),
 			mcplib.WithNumber("rating", mcplib.Required(), mcplib.Description("1.0 to 5.0")),
+			mcplib.WithString("session_id", mcplib.Description("Optional FT capture session_id from session_start")),
 		),
 		logTool("knowledge_rate", HandleKnowledgeRate(store, bus)),
 	)
@@ -136,6 +137,10 @@ func HandleKnowledgeRate(store storage.Store, bus live.EventBus) server.ToolHand
 
 		if err := store.RateEntry(ctx, id, rating); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("rate entry: %v", err)), nil
+		}
+
+		if sid := req.GetString("session_id", ""); sid != "" {
+			linkSessionKnowledge(ctx, store, sid, id, storage.FTKnowRated)
 		}
 
 		// Publish live event (best-effort, nil-safe). This context read is for

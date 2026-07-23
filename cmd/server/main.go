@@ -32,6 +32,7 @@ type combinedStore interface {
 	storage.TeamStore
 	storage.RuleStore
 	storage.TodoStore
+	storage.FTSessionStore
 }
 
 func main() {
@@ -79,8 +80,8 @@ func main() {
 		slog.Info("loaded environment from .env file", "path", envFile)
 	}
 
-	// Subcommand dispatch: export/import run an operation and exit. Must run
-	// before constructing the server store and starting the server.
+	// Subcommand dispatch: export/import/export-train run an operation and exit.
+	// Must run before constructing the server store and starting the server.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "export":
@@ -92,6 +93,12 @@ func main() {
 		case "import":
 			if err := runImport(cfg, os.Args[2:]); err != nil {
 				slog.Error("import failed", "err", err)
+				os.Exit(1)
+			}
+			return
+		case "export-train":
+			if err := runExportTrain(cfg, os.Args[2:]); err != nil {
+				slog.Error("export-train failed", "err", err)
 				os.Exit(1)
 			}
 			return
@@ -254,6 +261,7 @@ func main() {
 	internalmcp.RegisterAnalysisTools(mcpServer, store)
 	internalmcp.RegisterRuleTools(mcpServer, store)
 	internalmcp.RegisterTodoTools(mcpServer, store)
+	internalmcp.RegisterSessionTools(mcpServer, store)
 	internalmcp.RegisterAgentTools(mcpServer, store)
 	internalmcp.RegisterKnowledgeExtTools(mcpServer, store, src, liveHub)
 	internalmcp.RegisterVisibilityTools(mcpServer, store)
